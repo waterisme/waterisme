@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
@@ -15,16 +16,26 @@ public sealed class SlaveServer : IDisposable
     public event Action<int>?    ClientConnected;      // passes current count
     public event Action<int>?    ClientDisconnected;   // passes remaining count
 
-    private readonly string  _pin;
+    private readonly string  _colorPin;        // randomly generated each Slave session
+    private readonly string? _customPin;       // user-defined PIN (persistent), nullable
     private readonly int     _port;
     private TcpListener?     _listener;
     private bool             _running;
 
-    // All currently active client sockets — for clean shutdown
-    private readonly ConcurrentBag<TcpClient> _activeClients = new();
-    private int _clientCount = 0;
+    // Active client sockets — replaced ConcurrentBag (which never removes) with a Set we explicitly manage
+    private readonly HashSet<TcpClient> _activeClients = new();
+    private readonly object             _clientsLock   = new();
 
-    public SlaveServer(string pin, int port = 7890) { _pin = pin; _port = port; }
+    private int      _clientCount;            // currently connected
+    public  int      TotalAcceptedClients;    // monotonic counter for stats UI
+    public  DateTime StartedAt { get; } = DateTime.UtcNow;
+
+    public SlaveServer(string colorPin, string? customPin = null, int port = 7890)
+    {
+        _colorPin  = colorPin;
+        _customPin = string.IsNullOrEmpty(customPin) ? null : customPin;
+        _port      = port;
+    }
 
     public void Start()
     {
@@ -36,8 +47,12 @@ public sealed class SlaveServer : IDisposable
     {
         _running = false;
         _listener?.Stop();
-        foreach (var c in _activeClients)
-            try { c.Close(); } catch { }
+        lock (_clientsLock)
+        {
+            foreach (var c in _activeClients)
+                try { c.Close(); } catch { }
+            _activeClients.Clear();
+        }
     }
 
     // ── Server loop ──────────────────────────────────────────────────────────
@@ -53,7 +68,9 @@ public sealed class SlaveServer : IDisposable
             try
             {
                 var client = _listener.AcceptTcpClient();
-                _activeClients.Add(client);
+                Interlocked.Increment(ref TotalAcceptedClients);
+                ConfigureKeepAlive(client);
+                lock (_clientsLock) _activeClients.Add(client);
                 Report($"連線來自 {client.Client.RemoteEndPoint}");
                 new Thread(() => HandleClient(client))
                     { IsBackground = true, Name = "SlaveClient" }.Start();
@@ -63,87 +80,132 @@ public sealed class SlaveServer : IDisposable
         }
     }
 
+    /// <summary>
+    /// Enable OS-level TCP keepalive so dead masters are detected within ~50 s
+    /// instead of the 2-hour default.
+    /// </summary>
+    private static void ConfigureKeepAlive(TcpClient client)
+    {
+        try
+        {
+            client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
+            // tcp_keepalive_inproc on Windows: { onoff, time-ms, interval-ms }
+            var values = new byte[12];
+            BitConverter.GetBytes((uint)1).CopyTo(values, 0);        // on
+            BitConverter.GetBytes((uint)30000).CopyTo(values, 4);    // first probe after 30 s idle
+            BitConverter.GetBytes((uint)5000).CopyTo(values, 8);     // retry every 5 s
+            client.Client.IOControl(IOControlCode.KeepAliveValues, values, null);
+        }
+        catch { }
+    }
+
     private void HandleClient(TcpClient client)
     {
         client.NoDelay = true;
         var stream = client.GetStream();
 
-        // ── Send PIN challenge (master reads + discards; PIN already known via color UI) ──
-        Send(stream, Msg.PinChallenge(new[] { _pin }));
-
-        // ── Auth ──
-        var authMsg = Message.Read(stream);
-        if (authMsg == null) { client.Close(); return; }  // client disconnected after peeking challenge
-        if (authMsg.Type != MessageType.AuthRequest)
-        {
-            Send(stream, Msg.AuthResponse(false)); client.Close(); return;
-        }
-        string raw   = System.Text.Encoding.UTF8.GetString(authMsg.Payload);
-        string[] parts = raw.Split('|');
-        string pin  = parts[0];
-        string masterVersion = parts.Length > 1 ? parts[1] : "?";
-
-        if (pin != _pin)
-        {
-            Send(stream, Msg.AuthResponse(false)); client.Close();
-            Report("驗證失敗 (PIN 錯誤)"); return;
-        }
-        if (masterVersion != AppInfo.Version)
-            Report($"版本警告：主控端 v{masterVersion}，被控端 v{AppInfo.Version}");
-        Send(stream, Msg.AuthResponse(true));
-
-        // ── Monitor info ──
-        var monitors = MonitorHelper.GetAll();
-        var ws = new int[monitors.Count]; var hs = new int[monitors.Count];
-        for (int i = 0; i < monitors.Count; i++) { ws[i] = monitors[i].Bounds.Width; hs[i] = monitors[i].Bounds.Height; }
-        Send(stream, Msg.MonitorInfo(ws, hs));
-
-        // Per-session pause state (not shared between masters)
-        bool[] monitorPaused = new bool[monitors.Count];
-
-        int count = Interlocked.Increment(ref _clientCount);
-        ClientConnected?.Invoke(count);
-        Report($"已驗證，{count} 個主控端串流中…");
-
-        // ── Send queue ──
-        var sendQueue = new BlockingCollection<byte[]>(30);
-        new Thread(() =>
-        {
-            foreach (var buf in sendQueue.GetConsumingEnumerable())
-                try { stream.Write(buf, 0, buf.Length); } catch { break; }
-        }) { IsBackground = true, Name = "SlaveSend" }.Start();
-
-        void Enqueue(Message m) { var b = m.ToBytes(); sendQueue.TryAdd(b, 5); }
-
-        // ── Clipboard ──
-        using var clipboard = new ClipboardSync(text => Enqueue(Msg.ClipboardData(text)));
-        clipboard.Start();
-
-        // ── Capture threads ──
-        for (int i = 0; i < monitors.Count; i++)
-        {
-            int idx = i;
-            new Thread(() => CaptureLoop(monitors[idx], idx, sendQueue, monitorPaused))
-                { IsBackground = true, Name = $"Capture[{idx}]" }.Start();
-        }
-
-        // ── Input receive loop ──
         try
         {
-            while (_running && client.Connected)
-            {
-                var msg = Message.Read(stream);
-                if (msg == null) break;
-                ProcessInput(msg, clipboard, monitorPaused);
-            }
-        }
-        catch { }
+            // ── Send PIN challenge (master reads + discards; PIN already known via color/manual entry) ──
+            Send(stream, Msg.PinChallenge(new[] { _colorPin }));
 
-        sendQueue.CompleteAdding();
-        int remaining = Interlocked.Decrement(ref _clientCount);
-        ClientDisconnected?.Invoke(remaining);
-        Report(remaining > 0 ? $"{remaining} 個主控端仍在連線中…" : "連線斷開，等待下一個連線…");
-        client.Close();
+            // ── Auth ──
+            var authMsg = Message.Read(stream);
+            if (authMsg == null) return;
+            if (authMsg.Type != MessageType.AuthRequest)
+            {
+                Send(stream, Msg.AuthResponse(false)); return;
+            }
+            string raw          = System.Text.Encoding.UTF8.GetString(authMsg.Payload);
+            string[] parts      = raw.Split('|');
+            string suppliedPin  = parts[0];
+            string masterVersion = parts.Length > 1 ? parts[1] : "?";
+
+            bool ok = suppliedPin == _colorPin
+                   || (_customPin != null && suppliedPin == _customPin);
+            if (!ok)
+            {
+                Send(stream, Msg.AuthResponse(false));
+                Report("驗證失敗 (PIN 錯誤)"); return;
+            }
+            if (masterVersion != AppInfo.Version)
+                Report($"版本警告：主控端 v{masterVersion}，被控端 v{AppInfo.Version}");
+            Send(stream, Msg.AuthResponse(true));
+
+            // ── Monitor info ──
+            var monitors = MonitorHelper.GetAll();
+            var ws = new int[monitors.Count]; var hs = new int[monitors.Count];
+            for (int i = 0; i < monitors.Count; i++) { ws[i] = monitors[i].Bounds.Width; hs[i] = monitors[i].Bounds.Height; }
+            Send(stream, Msg.MonitorInfo(ws, hs));
+
+            // Per-session pause state
+            bool[] monitorPaused = new bool[monitors.Count];
+
+            int count = Interlocked.Increment(ref _clientCount);
+            ClientConnected?.Invoke(count);
+            Report($"已驗證，{count} 個主控端串流中…");
+
+            // ── Send queue ──
+            var sendQueue = new BlockingCollection<byte[]>(30);
+            new Thread(() =>
+            {
+                foreach (var buf in sendQueue.GetConsumingEnumerable())
+                    try { stream.Write(buf, 0, buf.Length); } catch { break; }
+            }) { IsBackground = true, Name = "SlaveSend" }.Start();
+
+            void Enqueue(Message m) { var b = m.ToBytes(); sendQueue.TryAdd(b, 5); }
+
+            // ── Clipboard ──
+            using var clipboard = new ClipboardSync(text => Enqueue(Msg.ClipboardData(text)));
+            clipboard.Start();
+
+            // ── Capture threads ──
+            for (int i = 0; i < monitors.Count; i++)
+            {
+                int idx = i;
+                new Thread(() => CaptureLoop(monitors[idx], idx, sendQueue, monitorPaused))
+                    { IsBackground = true, Name = $"Capture[{idx}]" }.Start();
+            }
+
+            // ── Application-level keepalive: send Ping every 20 s ──
+            long lastReceivedMs = Environment.TickCount64;
+            var pingTimer = new System.Threading.Timer(_ =>
+            {
+                try { Enqueue(Msg.Ping()); } catch { }
+            }, null, 20000, 20000);
+
+            // ── Input receive loop with read timeout ──
+            stream.ReadTimeout = 90000;       // 90 s — triggers IOException → break
+            try
+            {
+                while (_running && client.Connected)
+                {
+                    var msg = Message.Read(stream);
+                    if (msg == null) break;
+                    lastReceivedMs = Environment.TickCount64;
+                    ProcessInput(msg, clipboard, monitorPaused, Enqueue);
+                }
+            }
+            catch { /* read timeout / socket dead / etc. */ }
+
+            pingTimer.Dispose();
+            sendQueue.CompleteAdding();
+        }
+        finally
+        {
+            int remaining = Interlocked.Decrement(ref _clientCount);
+            // Decrement only if we got past the auth+increment block; clamp at >= 0.
+            if (remaining < 0) Interlocked.Exchange(ref _clientCount, 0);
+            else ClientDisconnected?.Invoke(remaining);
+
+            lock (_clientsLock) _activeClients.Remove(client);
+            try { client.Close(); } catch { }
+            Report(remaining > 0 ? $"{remaining} 個主控端仍在連線中…" : "連線斷開，等待下一個連線…");
+
+            // Level-2: drop GDI/bitmap garbage between sessions to keep long-running slave lean.
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+        }
     }
 
     // ── Capture ──────────────────────────────────────────────────────────────
@@ -157,13 +219,10 @@ public sealed class SlaveServer : IDisposable
         try { cap = new DxgiCapture(monitor.AdapterIndex, monitor.OutputIndex); }
         catch { return; }
 
-        // Per-session frame-change detection — skip encode+send when frame is unchanged.
-        // FNV-1a hash sampled every 256 bytes of the scaled bitmap (~30K samples / frame, < 1 ms).
         long lastHash = 0;
 
         while (_running && !queue.IsAddingCompleted)
         {
-            // Pause when master says so
             if (idx < monitorPaused.Length && monitorPaused[idx])
             {
                 Thread.Sleep(50); continue;
@@ -174,7 +233,6 @@ public sealed class SlaveServer : IDisposable
                 var bmp = cap.Capture();
                 if (bmp == null) continue;
 
-                // Scale down if larger than 1920×1080 to reduce bandwidth
                 if (bmp.Width > 1920 || bmp.Height > 1080)
                 {
                     float scale  = Math.Min(1920f / bmp.Width, 1080f / bmp.Height);
@@ -219,8 +277,6 @@ public sealed class SlaveServer : IDisposable
         cap?.Dispose();
     }
 
-    // FNV-1a 64-bit hash sampled every 256 bytes of the bitmap's raw pixel data.
-    // ~30K samples on a 1920×1080 frame → < 1 ms, false-collision probability negligible.
     private static unsafe long QuickHash(Bitmap bmp)
     {
         var rect = new Rectangle(0, 0, bmp.Width, bmp.Height);
@@ -229,14 +285,13 @@ public sealed class SlaveServer : IDisposable
         {
             byte* ptr = (byte*)data.Scan0;
             int   len = data.Stride * data.Height;
-            ulong hash = 14695981039346656037UL;          // FNV offset basis
+            ulong hash = 14695981039346656037UL;
             const ulong PRIME = 1099511628211UL;
             for (int i = 0; i < len; i += 256)
             {
                 hash ^= ptr[i];
                 hash *= PRIME;
             }
-            // Tail bytes — guard against length not divisible by 256
             for (int i = len - 8; i < len && i >= 0; i++)
             {
                 hash ^= ptr[i];
@@ -252,7 +307,7 @@ public sealed class SlaveServer : IDisposable
 
     // ── Input ─────────────────────────────────────────────────────────────────
 
-    private void ProcessInput(Message msg, ClipboardSync clipboard, bool[] monitorPaused)
+    private void ProcessInput(Message msg, ClipboardSync clipboard, bool[] monitorPaused, Action<Message> enqueue)
     {
         switch (msg.Type)
         {
@@ -276,6 +331,10 @@ public sealed class SlaveServer : IDisposable
             case MessageType.StreamResume:
                 int ri = Msg.ParseMonitorIndex(msg.Payload);
                 if (ri < monitorPaused.Length) monitorPaused[ri] = false; break;
+            case MessageType.Ping:
+                enqueue(Msg.Pong()); break;
+            case MessageType.Pong:
+                /* alive ack — handled by the read-timeout reset above */ break;
         }
     }
 
