@@ -12,7 +12,7 @@ Increment rules:
 - Bug fix or small tweak → bump patch (e.g. 1.2 → 1.3)
 - New feature → bump minor (e.g. 1.2 → 1.3, or 1.9 → 2.0 for major milestones)
 
-Current version: **1.4** (as of 2026-05-19)
+Current version: **1.5** (as of 2026-05-19)
 
 ## Workflow Rules
 - **Always confirm with the user before starting work.** Do not modify code
