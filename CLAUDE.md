@@ -12,7 +12,12 @@ Increment rules:
 - Bug fix or small tweak → bump patch (e.g. 1.2 → 1.3)
 - New feature → bump minor (e.g. 1.2 → 1.3, or 1.9 → 2.0 for major milestones)
 
-Current version: **1.2** (as of 2026-05-14)
+Current version: **1.3** (as of 2026-05-19)
+
+## Workflow Rules
+- **Always confirm with the user before starting work.** Do not modify code
+  until the user explicitly approves the plan.
+- After approval, make changes, build, and report back.
 
 ## Project Structure
 ```
@@ -20,7 +25,7 @@ src/Core/
   Protocol.cs        — message types, Msg helpers, AppInfo.Version, PinColors
   SlaveServer.cs     — multi-master TCP server (thread-per-client)
   MasterClient.cs    — TCP client, exposes SlaveVersion
-  DxgiCapture.cs     — GDI+ screen capture (Screen.AllScreens logical pixels)
+  DxgiCapture.cs     — Win32 BitBlt screen capture (physical pixels, PerMonitorV2)
   InputSimulator.cs  — Win32 mouse/keyboard injection
   ClipboardSync.cs   — bidirectional clipboard sync
   ConnectionHistory.cs
