@@ -22,6 +22,7 @@ public enum MessageType : byte
     StreamResume  = 0x0D,
     PinChallenge  = 0x0E,
     ScreenTiles   = 0x0F,   // delta frame: only changed 64×64 tiles
+    CursorUpdate  = 0x10,   // cursor position + (optional) shape
 }
 
 public sealed class Message
@@ -215,11 +216,48 @@ public static class Msg
         }
         return (monitor, frameW, frameH, tiles);
     }
+
+    // ── Cursor stream ────────────────────────────────────────────────────────
+    // png.Length == 0 means "shape unchanged since the last CursorUpdate
+    // on this monitor"; the master reuses the cached shape.
+
+    public static Message CursorUpdate(
+        int monitor, int x, int y, bool visible,
+        int hotspotX, int hotspotY, byte[] png)
+    {
+        using var ms = new MemoryStream();
+        using var w  = new BinaryWriter(ms);
+        w.Write(monitor);
+        w.Write(x);
+        w.Write(y);
+        w.Write(visible);
+        w.Write(hotspotX);
+        w.Write(hotspotY);
+        w.Write(png.Length);
+        if (png.Length > 0) w.Write(png);
+        return new Message { Type = MessageType.CursorUpdate, Payload = ms.ToArray() };
+    }
+
+    public static (int monitor, int x, int y, bool visible,
+                   int hotspotX, int hotspotY, byte[] png) ParseCursorUpdate(byte[] p)
+    {
+        using var ms = new MemoryStream(p);
+        using var r  = new BinaryReader(ms);
+        int  monitor  = r.ReadInt32();
+        int  x        = r.ReadInt32();
+        int  y        = r.ReadInt32();
+        bool visible  = r.ReadBoolean();
+        int  hotX     = r.ReadInt32();
+        int  hotY     = r.ReadInt32();
+        int  pngLen   = r.ReadInt32();
+        byte[] png    = pngLen > 0 ? r.ReadBytes(pngLen) : Array.Empty<byte>();
+        return (monitor, x, y, visible, hotX, hotY, png);
+    }
 }
 
 internal static class AppInfo
 {
-    public const string Version = "1.7";
+    public const string Version = "1.8";
 }
 
 // Five PIN colors shared by slave display and master selection

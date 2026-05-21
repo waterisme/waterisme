@@ -138,6 +138,14 @@ public sealed class MainForm : Form
                     img.Dispose();
             };
 
+            client.CursorUpdated += (idx, cx, cy, vis, hx, hy, shape) =>
+            {
+                if (idx < conn.Windows.Length)
+                    conn.Windows[idx].UpdateCursor(cx, cy, vis, hx, hy, shape);
+                else
+                    shape?.Dispose();
+            };
+
             bool ok = client.Connect(dlg.Ip, dlg.Pin, dlg.Port);
             SafeInvoke(() =>
             {

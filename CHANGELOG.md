@@ -1,5 +1,40 @@
 # 版本紀錄
 
+## v1.8 — 2026-05-19
+
+**Bug 修正：v1.7 整個畫面 freeze**
+- `DxgiCapture` 在 BitBlt 之後呼叫 `DrawIconEx` 把游標畫到 bitmap 上會阻塞，
+  造成擷取迴圈卡住，下游 tile diff 完全沒辦法運作。
+- 完全撤掉 capture 路徑的游標繪製。
+
+**Bug 修正：v1.7 tile diff 第一幀後就停 (症狀 B)**
+- 真正的 root cause：`MasterClient.HandleScreenData` 用 `new Bitmap(MemoryStream)`，
+  然後在 `using` 結尾 dispose 那個 stream。`Bitmap(stream)` 的契約是「stream
+  必須在 Bitmap 生命週期內保持開啟」，dispose 後 canvas 變失效，第二次以後
+  `Graphics.FromImage(canvas)` 拿到的就是 broken bitmap，tile 永遠繪不出來。
+- 修法：改用 `new Bitmap(Image.FromStream(ms))` 做一份**獨立 copy**，stream 可
+  安全 dispose。
+
+**Bug 修正：tile diff 的 pixel format 不一致**
+- `DxgiCapture` 改成 `Format32bppArgb` 與縮小路徑（預設就是 Argb）統一格式。
+- `ExtractPixels` 改用 `bmp.PixelFormat`（native）而非寫死 `Argb`，避免每幀
+  GDI+ 格式轉換造成 byte sequence 不確定。
+
+**新功能：游標獨立串流（v1.7 的 overlay 失敗後的替代方案）**
+- 新 message `CursorUpdate (0x10)`：
+  ```
+  monitor | x | y | visible (bool) | hotspotX | hotspotY | pngLen | png?
+  ```
+  png 長度 = 0 表示「形狀沒變，用快取的」。
+- Slave 開獨立 `CursorLoop` thread（~30 Hz）：
+  - 用 `GetCursorInfo` 取得位置 + cursor handle
+  - 位置縮放到「frame 座標」（與 master 收到的縮小圖一致）
+  - 只在位置變、形狀變、或重新出現時才送
+  - 形狀變化時用 `Icon.FromHandle().ToBitmap()` 編成 PNG（含 hotspot）
+- Master 收到後存進 `MonitorWindow._cursorShape` 並 `Invalidate()`；
+  `OnCanvasPaint` 在畫完螢幕後依當前 letterbox/stretch 縮放繪製游標。
+- 優點：靜態畫面時游標仍順、tile diff 不會被游標移動干擾、capture 不會 freeze。
+
 ## v1.7 — 2026-05-19
 
 **Bug 修正：關閉最後一個視窗會 crash**

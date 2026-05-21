@@ -13,6 +13,11 @@ public sealed class MasterClient : IDisposable
     public event Action<int, Image>?   ScreenUpdated;
     public event Action<int[], int[]>? MonitorInfoReceived;
     public event Action?               Disconnected;
+    /// <summary>
+    /// (monitorIdx, frameX, frameY, visible, hotspotX, hotspotY, newShape)
+    /// — newShape != null only when the cursor shape changed; otherwise reuse cached.
+    /// </summary>
+    public event Action<int, int, int, bool, int, int, Bitmap?>? CursorUpdated;
 
     private TcpClient?     _tcp;
     private NetworkStream? _stream;
@@ -89,6 +94,9 @@ public sealed class MasterClient : IDisposable
                     case MessageType.ScreenTiles:
                         HandleScreenTiles(msg.Payload);
                         break;
+                    case MessageType.CursorUpdate:
+                        HandleCursorUpdate(msg.Payload);
+                        break;
                     case MessageType.MonitorInfo:
                         var (ws, hs) = Msg.ParseMonitorInfo(msg.Payload);
                         MonitorInfoReceived?.Invoke(ws, hs);
@@ -111,11 +119,16 @@ public sealed class MasterClient : IDisposable
     private void HandleScreenData(byte[] payload)
     {
         var (idx, jpeg) = Msg.ParseScreenData(payload);
-        Bitmap full;
-        using (var ms = new MemoryStream(jpeg))
-            full = new Bitmap(ms);                          // decoded once, kept
 
-        // Store as the per-monitor canvas; subsequent ScreenTiles will patch this.
+        // CRITICAL: `new Bitmap(stream)` keeps a reference to the underlying
+        // stream; if we dispose the MemoryStream the Bitmap becomes invalid.
+        // The fix is `new Bitmap(decoded)` which makes an independent copy.
+        Bitmap full;
+        using (var ms       = new MemoryStream(jpeg))
+        using (var decoded  = Image.FromStream(ms))
+            full = new Bitmap(decoded);
+
+        // Store as the per-monitor canvas; subsequent ScreenTiles patch this.
         lock (_canvasLock)
         {
             if (_canvases.TryGetValue(idx, out var old)) old.Dispose();
@@ -123,6 +136,24 @@ public sealed class MasterClient : IDisposable
         }
         // Hand a private clone to the UI — MonitorWindow owns and disposes it.
         ScreenUpdated?.Invoke(idx, (Image)full.Clone());
+    }
+
+    private void HandleCursorUpdate(byte[] payload)
+    {
+        var (mon, x, y, visible, hotX, hotY, png) = Msg.ParseCursorUpdate(payload);
+
+        Bitmap? newShape = null;
+        if (png.Length > 0)
+        {
+            try
+            {
+                using var ms  = new MemoryStream(png);
+                using var tmp = Image.FromStream(ms);
+                newShape = new Bitmap(tmp);                 // independent copy
+            }
+            catch { newShape = null; }
+        }
+        CursorUpdated?.Invoke(mon, x, y, visible, hotX, hotY, newShape);
     }
 
     private void HandleScreenTiles(byte[] payload)
