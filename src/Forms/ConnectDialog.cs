@@ -173,6 +173,7 @@ public sealed class ConnectDialog : Form
         cancel.Click += (_, _) => { DialogResult = DialogResult.Cancel; Close(); };
         Controls.Add(cancel);
         CancelButton = cancel;
+        AcceptButton = pinConnectBtn;     // Enter → 用 PIN 連線
     }
 
     // ── Color clicked ────────────────────────────────────────────────────────

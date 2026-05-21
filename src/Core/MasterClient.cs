@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Net.Sockets;
@@ -18,6 +19,10 @@ public sealed class MasterClient : IDisposable
     private readonly object _sendLock = new();
     private bool           _running;
     private ClipboardSync? _clipboard;
+
+    // Per-monitor canvas — accumulates tile updates between keyframes
+    private readonly Dictionary<int, Bitmap> _canvases = new();
+    private readonly object _canvasLock = new();
 
     public bool   IsConnected  => _running && (_tcp?.Connected ?? false);
     public string SlaveVersion { get; private set; } = "";
@@ -59,6 +64,11 @@ public sealed class MasterClient : IDisposable
         _running = false;
         _clipboard?.Dispose();
         _tcp?.Close();
+        lock (_canvasLock)
+        {
+            foreach (var b in _canvases.Values) try { b.Dispose(); } catch { }
+            _canvases.Clear();
+        }
     }
 
     // ── Receive ───────────────────────────────────────────────────────────────
@@ -74,12 +84,10 @@ public sealed class MasterClient : IDisposable
                 switch (msg.Type)
                 {
                     case MessageType.ScreenData:
-                        var (idx, jpeg) = Msg.ParseScreenData(msg.Payload);
-                        using (var ms = new MemoryStream(jpeg))
-                        {
-                            var img = (Image)Image.FromStream(ms).Clone();
-                            ScreenUpdated?.Invoke(idx, img);
-                        }
+                        HandleScreenData(msg.Payload);
+                        break;
+                    case MessageType.ScreenTiles:
+                        HandleScreenTiles(msg.Payload);
                         break;
                     case MessageType.MonitorInfo:
                         var (ws, hs) = Msg.ParseMonitorInfo(msg.Payload);
@@ -98,6 +106,54 @@ public sealed class MasterClient : IDisposable
         _clipboard?.Dispose();
         _running = false;
         Disconnected?.Invoke();
+    }
+
+    private void HandleScreenData(byte[] payload)
+    {
+        var (idx, jpeg) = Msg.ParseScreenData(payload);
+        Bitmap full;
+        using (var ms = new MemoryStream(jpeg))
+            full = new Bitmap(ms);                          // decoded once, kept
+
+        // Store as the per-monitor canvas; subsequent ScreenTiles will patch this.
+        lock (_canvasLock)
+        {
+            if (_canvases.TryGetValue(idx, out var old)) old.Dispose();
+            _canvases[idx] = full;
+        }
+        // Hand a private clone to the UI — MonitorWindow owns and disposes it.
+        ScreenUpdated?.Invoke(idx, (Image)full.Clone());
+    }
+
+    private void HandleScreenTiles(byte[] payload)
+    {
+        var (idx, frameW, frameH, tiles) = Msg.ParseScreenTiles(payload);
+        Bitmap? snapshot;
+
+        lock (_canvasLock)
+        {
+            if (!_canvases.TryGetValue(idx, out var canvas)
+                || canvas.Width  != frameW
+                || canvas.Height != frameH)
+            {
+                // No baseline yet (or resolution changed) — ignore; we'll get
+                // a keyframe within 10 s and pick up from there.
+                return;
+            }
+
+            using (var g = Graphics.FromImage(canvas))
+            {
+                foreach (var t in tiles)
+                {
+                    using var ms      = new MemoryStream(t.Jpeg);
+                    using var tileImg = Image.FromStream(ms);
+                    g.DrawImage(tileImg, t.X, t.Y, t.W, t.H);
+                }
+            }
+            snapshot = (Bitmap)canvas.Clone();
+        }
+
+        ScreenUpdated?.Invoke(idx, snapshot);
     }
 
     // ── Send ──────────────────────────────────────────────────────────────────

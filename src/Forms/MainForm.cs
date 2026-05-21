@@ -13,12 +13,13 @@ public sealed class MainForm : Form
     // ── Connection tracking ───────────────────────────────────────────────────
     private sealed class Connection
     {
-        public string          Nickname    = "";
-        public string          Ip          = "";
-        public MasterClient    Client      = null!;
-        public MonitorWindow[] Windows     = Array.Empty<MonitorWindow>();
+        public string          Nickname     = "";
+        public string          Ip           = "";
+        public MasterClient    Client       = null!;
+        public MonitorWindow[] Windows      = Array.Empty<MonitorWindow>();
         public ListViewItem?   Item;
-        public int             OpenWindows;   // decremented on each FormClosed; reaches 0 → disconnect
+        public int             OpenWindows;     // decremented on each FormClosed; reaches 0 → disconnect
+        public bool            Disconnecting;   // re-entry guard for Disconnect()
     }
 
     private readonly List<Connection> _connections = new();
@@ -207,14 +208,17 @@ public sealed class MainForm : Form
             win.FormClosed += (_, _) =>
             {
                 try { conn.Client.SendStreamPause(idx); } catch { }
-                // FormClosed fires BEFORE Dispose, so IsDisposed is still false here.
-                // We use an explicit counter instead — when all windows closed, fully disconnect.
-                SafeInvoke(() =>
+                conn.OpenWindows--;
+                if (conn.OpenWindows <= 0
+                    && !conn.Disconnecting
+                    && _connections.Contains(conn))
                 {
-                    conn.OpenWindows--;
-                    if (conn.OpenWindows <= 0 && _connections.Contains(conn))
-                        Disconnect(conn);
-                });
+                    conn.Disconnecting = true;
+                    // BeginInvoke (not Invoke) so Disconnect runs AFTER the current
+                    // FormClosed event finishes — otherwise w.Close() inside Disconnect
+                    // would reenter the same window's cleanup and crash WinForms.
+                    BeginInvoke(new Action(() => Disconnect(conn)));
+                }
             };
             win.Show();
             wins[idx] = win;
@@ -239,9 +243,14 @@ public sealed class MainForm : Form
 
     private void Disconnect(Connection conn)
     {
+        if (!_connections.Contains(conn)) return;        // already torn down
+        conn.Disconnecting = true;
         foreach (var w in conn.Windows)
-            if (!w.IsDisposed) w.Close();
-        conn.Client?.Dispose();
+        {
+            if (w.IsDisposed) continue;
+            try { w.Close(); } catch { }
+        }
+        try { conn.Client?.Dispose(); } catch { }
         _connections.Remove(conn);
         if (conn.Item != null) _listView.Items.Remove(conn.Item);
         UpdateButtons();
