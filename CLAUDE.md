@@ -1,57 +1,98 @@
 # Remote Desktop — Project Rules
 
-## Version Number
-**Every code change must increment the version number.**
+> **首次接手請依序讀：本檔案 → `CHANGELOG.md` → `SESSION-HANDOVER.md`**
 
-Version is defined in one place:
+## 當前版本
+
+**v1.8** (master 分支，2026-05-21)
+
+最近的 stable tag：`v1.8-stable`、`v1.3-stable`
+
+## 工作流程規則（必守，不可違反）
+
+1. **改 code 前必須先跟使用者確認**，不可未經授權直接動工
+2. **每次改 code，`src/Core/Protocol.cs` 的 `AppInfo.Version` 必須遞增**
+   - Bug fix / 小改 → patch +0.1（例如 1.8 → 1.9）
+   - 新功能 → minor +0.1（例如 1.9 → 2.0 視重要程度）
+3. **`CHANGELOG.md`** 必須補上對應條目
+4. **`CLAUDE.md`** 的「當前版本」一起更新
+5. **流程**：改 code → build → publish → commit → push 一次完成
+
+## 版本號定義位置（唯一）
+
 ```
 src/Core/Protocol.cs  →  internal static class AppInfo { public const string Version = "x.x"; }
 ```
 
-Increment rules:
-- Bug fix or small tweak → bump patch (e.g. 1.2 → 1.3)
-- New feature → bump minor (e.g. 1.2 → 1.3, or 1.9 → 2.0 for major milestones)
-
-Current version: **1.8** (as of 2026-05-19)
-
-## Workflow Rules
-- **Always confirm with the user before starting work.** Do not modify code
-  until the user explicitly approves the plan.
-- After approval, make changes, build, and report back.
-
 ## Project Structure
+
 ```
 src/Core/
-  Protocol.cs        — message types, Msg helpers, AppInfo.Version, PinColors
-  SlaveServer.cs     — multi-master TCP server (thread-per-client)
-  MasterClient.cs    — TCP client, exposes SlaveVersion
-  DxgiCapture.cs     — Win32 BitBlt screen capture (physical pixels, PerMonitorV2)
+  Protocol.cs        — Wire protocol、AppInfo.Version、PinColors、Msg helpers
+  SlaveServer.cs     — Multi-master TCP server（thread-per-client）
+  MasterClient.cs    — TCP client，maintains per-monitor canvas
+  DxgiCapture.cs     — Win32 BitBlt screen capture（PerMonitorV2 物理像素）
   InputSimulator.cs  — Win32 mouse/keyboard injection
-  ClipboardSync.cs   — bidirectional clipboard sync
+  ClipboardSync.cs   — 雙向剪貼簿
   ConnectionHistory.cs
+  SlaveConfig.cs     — 自訂 PIN 持久化（%APPDATA%\RemoteDesktop\slave.json）
 
 src/Forms/
-  MainForm.cs        — connection list, opens Slave/Master windows
-  ConnectDialog.cs   — 5 color buttons (紅藍黃黑白), IP + nickname entry
-  SlaveForm.cs       — shows large color swatch + IP + status
-  MonitorWindow.cs   — remote screen display, toolbar, input forwarding
+  MainForm.cs        — 連線管理器（Add/Disconnect/Show、Slave 啟動）
+  ConnectDialog.cs   — 5 色按鈕 + PIN textbox
+  SlaveForm.cs       — Slave UI（色塊 + PIN 設定 + admin 警告 + 統計）
+  MonitorWindow.cs   — 遠端螢幕視窗（自訂 paint + 游標 overlay + FPS）
 
-src/Program.cs
+src/Program.cs       — Application.SetHighDpiMode(PerMonitorV2)
 ```
 
 ## PIN / Auth Flow
-- Slave picks a random color (PinColors.Random()) on startup
-- Slave displays a large color swatch on SlaveForm
-- Master's ConnectDialog shows 5 color buttons immediately (no pre-connection needed)
-- User clicks the color matching the slave's swatch → sent as AuthRequest PIN
-- Slave verifies color string matches
+
+- Slave 啟動隨機選色（紅/藍/黃/黑/白）→ UI 顯示色塊
+- Slave 可選設「自訂 PIN」（4-32 字元，持久化到 AppData）
+- Slave 同時接受**色塊名稱** 或 **自訂 PIN** 兩種登入
+- Master ConnectDialog 用 5 顆顏色鈕 或 PIN textbox 任一連線
+
+## Protocol（自訂 binary）
+
+Frame: `[int32 bodyLen][byte type][payload bytes]`
+
+Message types（`MessageType` enum in Protocol.cs）：
+- 0x01 AuthRequest / 0x02 AuthResponse
+- 0x03 ScreenData（完整 JPEG，keyframe）
+- 0x04-0x07 Mouse/KeyEvent / 0x08 ClipboardData
+- 0x09 MonitorInfo
+- 0x0A Ping / 0x0B Pong（每 20s）
+- 0x0C StreamPause / 0x0D StreamResume
+- 0x0E PinChallenge（slave 連線初送）
+- 0x0F ScreenTiles（delta 64×64 tiles）
+- 0x10 CursorUpdate（位置 + optional PNG shape）
 
 ## Build & Publish
-```
-cd src
-dotnet build -c Debug                          # quick check
-dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:DebugType=none -o ..\publish
-```
-Output: `publish\RemoteDesktop.exe`
 
-> Do NOT use Visual Studio Publish — it fails due to a VS WebTools plugin bug.
+```powershell
+cd src
+dotnet build -c Debug                          # 快速驗證
+dotnet publish -c Release -r win-x64 --self-contained true `
+  -p:PublishSingleFile=true -p:DebugType=none -o ..\publish
+```
+
+輸出：`publish\RemoteDesktop.exe`
+
+> ⚠ **不要用 Visual Studio Publish** — VS WebTools 在此專案會失敗。
+
+## 環境
+
+- .NET 8 WinForms (`net8.0-windows`)
+- `<AllowUnsafeBlocks>true</AllowUnsafeBlocks>` — 給 FNV hash 用
+- 路徑：`P:\BE\01.其他留存資料\00.AI資料\coding\waterisme-claude-remote-desktop-software-1CfWb`
+- GitHub：https://github.com/waterisme/waterisme（branch: `master`）
+
+## 重要設計決策（影響後續工作）
+
+- **screen capture 用 Win32 BitBlt**（不用 DXGI／SharpDX 在 .NET 8 壞掉、不用 CopyFromScreen DPI 有問題）
+- **`Application.SetHighDpiMode(PerMonitorV2)`** 才能讓 `Screen.Bounds` 回傳物理像素
+- **Pixel format 必須統一為 `Format32bppArgb`**（避免 tile diff 比對不一致）
+- **`new Bitmap(MemoryStream)` 是地雷**：要用 `new Bitmap(Image.FromStream(ms))` 做獨立 copy
+- **多 master 用 `HashSet<TcpClient> + lock`**（不用 ConcurrentBag — 無法移除）
+- **Cursor 獨立串流**（不要畫進 capture bitmap，會 freeze）
