@@ -9,13 +9,13 @@ using System.Windows.Forms;
 namespace RemoteDesktop.Core;
 
 /// <summary>
-/// Per-monitor screen capture using Win32 BitBlt. With PerMonitorV2 DPI
-/// awareness (set in Program.cs) Screen.Bounds returns physical pixels, so
-/// BitBlt captures the entire physical screen regardless of DPI scale.
+/// Per-monitor screen capture using Win32 BitBlt. The cursor sprite is
+/// sent separately by SlaveServer's CursorLoop and overlaid by the master
+/// (see Msg.CursorUpdate). With PerMonitorV2 DPI awareness (Program.cs)
+/// Screen.Bounds returns physical pixels.
 /// </summary>
 public sealed class DxgiCapture : IDisposable
 {
-    // ── Win32 ────────────────────────────────────────────────────────────────
     [DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern int    ReleaseDC(IntPtr hWnd, IntPtr hDC);
     [DllImport("gdi32.dll")]  private static extern bool   BitBlt(
@@ -23,9 +23,8 @@ public sealed class DxgiCapture : IDisposable
         IntPtr hdcSrc,  int xSrc,  int ySrc,  uint rop);
 
     private const uint SRCCOPY    = 0x00CC0020;
-    private const uint CAPTUREBLT = 0x40000000;   // include layered windows / cursor regions
+    private const uint CAPTUREBLT = 0x40000000;
 
-    // ── Fields ───────────────────────────────────────────────────────────────
     private readonly int _screenLeft;
     private readonly int _screenTop;
     private readonly int _width;
@@ -45,16 +44,18 @@ public sealed class DxgiCapture : IDisposable
         _height     = b.Height;
     }
 
-    /// <summary>Captures the monitor at physical pixel resolution via BitBlt.</summary>
+    /// <summary>Captures the monitor at physical pixel resolution (no cursor).</summary>
     public Bitmap? Capture()
     {
+        // Format32bppArgb so the scaled / unscaled paths use the same byte
+        // layout — keeps SlaveServer's tile-diff comparison consistent.
         Bitmap?   bmp    = null;
         Graphics? g      = null;
         IntPtr    destDc = IntPtr.Zero;
         IntPtr    srcDc  = IntPtr.Zero;
         try
         {
-            bmp    = new Bitmap(_width, _height, PixelFormat.Format32bppRgb);
+            bmp    = new Bitmap(_width, _height, PixelFormat.Format32bppArgb);
             g      = Graphics.FromImage(bmp);
             destDc = g.GetHdc();
             srcDc  = GetDC(IntPtr.Zero);
@@ -87,7 +88,6 @@ public record MonitorInfo(int AdapterIndex, int OutputIndex, Rectangle Bounds);
 
 public static class MonitorHelper
 {
-    /// <summary>Monitors sorted left-to-right using physical pixel bounds (PerMonitorV2).</summary>
     public static List<MonitorInfo> GetAll() =>
         Screen.AllScreens
               .OrderBy(s => s.Bounds.X)

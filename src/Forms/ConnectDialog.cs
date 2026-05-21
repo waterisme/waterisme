@@ -29,7 +29,7 @@ public sealed class ConnectDialog : Form
     public ConnectDialog()
     {
         Text            = "新增連線";
-        Size            = new Size(360, 420);
+        Size            = new Size(360, 510);
         StartPosition   = FormStartPosition.CenterParent;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox     = false;
@@ -106,6 +106,62 @@ public sealed class ConnectDialog : Form
         }
         y += btnH + 16;
 
+        // ── OR divider ──
+        Controls.Add(new Label
+        {
+            Text      = "─────────  或  ─────────",
+            Location  = new Point(20, y),
+            Size      = new Size(320, 18),
+            Font      = new Font("Segoe UI", 8),
+            ForeColor = Color.Gray,
+            TextAlign = ContentAlignment.MiddleCenter,
+        });
+        y += 22;
+
+        // ── Custom PIN textbox + connect button ──
+        Controls.Add(new Label
+        {
+            Text      = "輸入 PIN：",
+            Location  = new Point(20, y + 4),
+            Size      = new Size(68, 22),
+            Font      = new Font("Segoe UI", 10),
+        });
+        var pinBox = new TextBox
+        {
+            Location  = new Point(90, y),
+            Size      = new Size(150, 28),
+            Font      = new Font("Segoe UI", 11),
+            MaxLength = 32,
+        };
+        Controls.Add(pinBox);
+
+        var pinConnectBtn = new Button
+        {
+            Text      = "用 PIN 連線",
+            Location  = new Point(248, y - 2),
+            Size      = new Size(92, 32),
+            Font      = new Font("Segoe UI", 9),
+            BackColor = Color.FromArgb(0, 120, 215),
+            ForeColor = Color.White,
+            FlatStyle = FlatStyle.Flat,
+            Cursor    = Cursors.Hand,
+        };
+        pinConnectBtn.Click += (_, _) =>
+        {
+            string ip = _ipBox.Text.Trim();
+            if (ip.Length == 0) { ShowErr("請先輸入 IP 位址。"); return; }
+            string p = pinBox.Text.Trim();
+            if (p.Length == 0) { ShowErr("請輸入 PIN。"); return; }
+            Nickname = _nickBox.Text.Trim().Length > 0 ? _nickBox.Text.Trim() : ip;
+            Ip = ip;
+            Pin = p;
+            ConnectionHistory.AddOrUpdate(Nickname, Ip, Port);
+            DialogResult = DialogResult.OK;
+            Close();
+        };
+        Controls.Add(pinConnectBtn);
+        y += 40;
+
         // ── Cancel ──
         var cancel = new Button
         {
@@ -117,6 +173,7 @@ public sealed class ConnectDialog : Form
         cancel.Click += (_, _) => { DialogResult = DialogResult.Cancel; Close(); };
         Controls.Add(cancel);
         CancelButton = cancel;
+        AcceptButton = pinConnectBtn;     // Enter → 用 PIN 連線
     }
 
     // ── Color clicked ────────────────────────────────────────────────────────

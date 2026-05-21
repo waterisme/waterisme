@@ -13,11 +13,13 @@ public sealed class MainForm : Form
     // ── Connection tracking ───────────────────────────────────────────────────
     private sealed class Connection
     {
-        public string          Nickname = "";
-        public string          Ip       = "";
-        public MasterClient    Client   = null!;
-        public MonitorWindow[] Windows  = Array.Empty<MonitorWindow>();
+        public string          Nickname     = "";
+        public string          Ip           = "";
+        public MasterClient    Client       = null!;
+        public MonitorWindow[] Windows      = Array.Empty<MonitorWindow>();
         public ListViewItem?   Item;
+        public int             OpenWindows;     // decremented on each FormClosed; reaches 0 → disconnect
+        public bool            Disconnecting;   // re-entry guard for Disconnect()
     }
 
     private readonly List<Connection> _connections = new();
@@ -136,6 +138,14 @@ public sealed class MainForm : Form
                     img.Dispose();
             };
 
+            client.CursorUpdated += (idx, cx, cy, vis, hx, hy, shape) =>
+            {
+                if (idx < conn.Windows.Length)
+                    conn.Windows[idx].UpdateCursor(cx, cy, vis, hx, hy, shape);
+                else
+                    shape?.Dispose();
+            };
+
             bool ok = client.Connect(dlg.Ip, dlg.Pin, dlg.Port);
             SafeInvoke(() =>
             {
@@ -170,15 +180,16 @@ public sealed class MainForm : Form
 
         for (int i = 0; i < total; i++)
         {
-            string title = MonitorWindow.MakeTitle(conn.Nickname, i, total);
-            var win = new MonitorWindow(conn.Client, i, title);
+            int    idx   = i;                                  // captured by lambda (for-loop var is shared)
+            string title = MonitorWindow.MakeTitle(conn.Nickname, idx, total);
+            var    win   = new MonitorWindow(conn.Client, idx, title);
 
             // Place on corresponding local screen (by left-to-right index)
-            var screen   = i < localScreens.Length ? localScreens[i] : Screen.PrimaryScreen!;
+            var screen   = idx < localScreens.Length ? localScreens[idx] : Screen.PrimaryScreen!;
             var workArea = screen.WorkingArea;
 
             // Size window so image area matches remote monitor aspect ratio
-            float aspect  = (float)ws[i] / hs[i];
+            float aspect  = (float)ws[idx] / hs[idx];
             int   chrome  = SystemInformation.CaptionHeight + SystemInformation.FrameBorderSize.Height * 2;
             int   maxImgW = workArea.Width  - 40;
             int   maxImgH = workArea.Height - 40 - chrome - ToolbarH;
@@ -204,11 +215,23 @@ public sealed class MainForm : Form
             win.RequestDisconnect += () => SafeInvoke(() => Disconnect(conn));
             win.FormClosed += (_, _) =>
             {
-                try { conn.Client.SendStreamPause(i); } catch { }
+                try { conn.Client.SendStreamPause(idx); } catch { }
+                conn.OpenWindows--;
+                if (conn.OpenWindows <= 0
+                    && !conn.Disconnecting
+                    && _connections.Contains(conn))
+                {
+                    conn.Disconnecting = true;
+                    // BeginInvoke (not Invoke) so Disconnect runs AFTER the current
+                    // FormClosed event finishes — otherwise w.Close() inside Disconnect
+                    // would reenter the same window's cleanup and crash WinForms.
+                    BeginInvoke(new Action(() => Disconnect(conn)));
+                }
             };
             win.Show();
-            wins[i] = win;
+            wins[idx] = win;
         }
+        conn.OpenWindows = total;
 
         conn.Windows = wins;
         conn.Item!.SubItems[0].Text = "●";
@@ -228,9 +251,14 @@ public sealed class MainForm : Form
 
     private void Disconnect(Connection conn)
     {
+        if (!_connections.Contains(conn)) return;        // already torn down
+        conn.Disconnecting = true;
         foreach (var w in conn.Windows)
-            if (!w.IsDisposed) w.Close();
-        conn.Client?.Dispose();
+        {
+            if (w.IsDisposed) continue;
+            try { w.Close(); } catch { }
+        }
+        try { conn.Client?.Dispose(); } catch { }
         _connections.Remove(conn);
         if (conn.Item != null) _listView.Items.Remove(conn.Item);
         UpdateButtons();

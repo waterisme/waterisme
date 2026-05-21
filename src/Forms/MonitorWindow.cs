@@ -44,6 +44,19 @@ public sealed class MonitorWindow : Form
     private Rectangle        _prevBounds;
     private bool             _streamPaused;
 
+    // FPS counter — counts received frames, recomputed once per second
+    private int              _fpsFrameCount;
+    private long             _fpsLastTickMs;
+    private double           _fps;
+
+    // Cursor overlay state (driven by SlaveServer.CursorLoop via MasterClient)
+    private int     _cursorX;
+    private int     _cursorY;
+    private int     _cursorHotX;
+    private int     _cursorHotY;
+    private bool    _cursorVisible;
+    private Bitmap? _cursorShape;
+
     // ── Constructor ───────────────────────────────────────────────────────────
     public MonitorWindow(MasterClient client, int monitorIndex, string title)
     {
@@ -162,6 +175,19 @@ public sealed class MonitorWindow : Form
                 lock (_imgLock) { old = _canvasImage; _canvasImage = img; }
                 old?.Dispose();
                 _canvas.Invalidate();
+
+                // FPS update — recompute once per second
+                _fpsFrameCount++;
+                long now = Environment.TickCount64;
+                if (_fpsLastTickMs == 0) _fpsLastTickMs = now;
+                long elapsed = now - _fpsLastTickMs;
+                if (elapsed >= 1000)
+                {
+                    _fps           = _fpsFrameCount * 1000.0 / elapsed;
+                    _fpsFrameCount = 0;
+                    _fpsLastTickMs = now;
+                    UpdateTitle();
+                }
             });
         }
         catch { img.Dispose(); }
@@ -195,6 +221,45 @@ public sealed class MonitorWindow : Form
             e.Graphics.DrawImage(img, dx, dy, dw, dh);
             _imgDrawRect = new Rectangle(dx, dy, dw, dh);
         }
+
+        // ── Cursor overlay (drawn after the screen so cursor sits on top) ──
+        if (_cursorVisible && _cursorShape != null && _imgDrawRect.Width > 0)
+        {
+            float sx = (float)_imgDrawRect.Width  / img.Width;
+            float sy = (float)_imgDrawRect.Height / img.Height;
+            float cx = _imgDrawRect.X + (_cursorX - _cursorHotX) * sx;
+            float cy = _imgDrawRect.Y + (_cursorY - _cursorHotY) * sy;
+            e.Graphics.DrawImage(_cursorShape, cx, cy,
+                _cursorShape.Width  * sx,
+                _cursorShape.Height * sy);
+        }
+    }
+
+    /// <summary>
+    /// Called from MasterClient.CursorUpdated (via UI-thread Invoke in MainForm).
+    /// newShape != null means the cursor shape changed — take ownership and
+    /// dispose the previous one. Hotspot is updated together with shape.
+    /// </summary>
+    public void UpdateCursor(int x, int y, bool visible, int hotX, int hotY, Bitmap? newShape)
+    {
+        if (IsDisposed) { newShape?.Dispose(); return; }
+        try
+        {
+            Invoke(() =>
+            {
+                _cursorX = x; _cursorY = y;
+                _cursorVisible = visible;
+                if (newShape != null)
+                {
+                    _cursorShape?.Dispose();
+                    _cursorShape = newShape;
+                    _cursorHotX  = hotX;
+                    _cursorHotY  = hotY;
+                }
+                _canvas.Invalidate();
+            });
+        }
+        catch { newShape?.Dispose(); }
     }
 
     // ── Fullscreen ────────────────────────────────────────────────────────────
@@ -264,8 +329,9 @@ public sealed class MonitorWindow : Form
     {
         string scale = _fillMode ? "填滿" : "等比例";
         string fs    = _fullscreen ? "  [全螢幕]" : "";
-        Text               = $"{_baseTitle}  [{scale}]{fs}";
-        _overlayTitle.Text = _baseTitle;
+        string fps   = $"  {_fps:F1} fps";
+        Text               = $"{_baseTitle}  [{scale}]{fs}{fps}";
+        _overlayTitle.Text = $"{_baseTitle}{fps}";
     }
 
     // ── Mouse forwarding ──────────────────────────────────────────────────────
@@ -318,6 +384,7 @@ public sealed class MonitorWindow : Form
         _overlayTimer.Stop();
         if (_fullscreen) ExitFullscreen();
         lock (_imgLock) { _canvasImage?.Dispose(); _canvasImage = null; }
+        _cursorShape?.Dispose(); _cursorShape = null;
         base.OnFormClosing(e);
     }
 

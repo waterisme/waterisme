@@ -21,6 +21,8 @@ public enum MessageType : byte
     StreamPause   = 0x0C,
     StreamResume  = 0x0D,
     PinChallenge  = 0x0E,
+    ScreenTiles   = 0x0F,   // delta frame: only changed 64×64 tiles
+    CursorUpdate  = 0x10,   // cursor position + (optional) shape
 }
 
 public sealed class Message
@@ -169,11 +171,93 @@ public static class Msg
                 Payload = Encoding.UTF8.GetBytes(string.Join("|", pins)) };
     public static string[] ParsePinChallenge(byte[] p) =>
         Encoding.UTF8.GetString(p).Split('|');
+
+    public static Message Ping() => new() { Type = MessageType.Ping };
+    public static Message Pong() => new() { Type = MessageType.Pong };
+
+    // ── Tile delta frame ─────────────────────────────────────────────────────
+    public readonly record struct Tile(short X, short Y, short W, short H, byte[] Jpeg);
+
+    public static Message ScreenTiles(int monitor, int frameW, int frameH, IReadOnlyList<Tile> tiles)
+    {
+        using var ms = new MemoryStream();
+        using var w  = new BinaryWriter(ms);
+        w.Write(monitor);
+        w.Write(frameW);
+        w.Write(frameH);
+        w.Write(tiles.Count);
+        foreach (var t in tiles)
+        {
+            w.Write(t.X);  w.Write(t.Y);  w.Write(t.W);  w.Write(t.H);
+            w.Write(t.Jpeg.Length);
+            w.Write(t.Jpeg);
+        }
+        return new Message { Type = MessageType.ScreenTiles, Payload = ms.ToArray() };
+    }
+
+    public static (int monitor, int frameW, int frameH, Tile[] tiles) ParseScreenTiles(byte[] p)
+    {
+        using var ms = new MemoryStream(p);
+        using var r  = new BinaryReader(ms);
+        int monitor = r.ReadInt32();
+        int frameW  = r.ReadInt32();
+        int frameH  = r.ReadInt32();
+        int count   = r.ReadInt32();
+        var tiles   = new Tile[count];
+        for (int i = 0; i < count; i++)
+        {
+            short tx = r.ReadInt16();
+            short ty = r.ReadInt16();
+            short tw = r.ReadInt16();
+            short th = r.ReadInt16();
+            int   jl = r.ReadInt32();
+            byte[] jpeg = r.ReadBytes(jl);
+            tiles[i] = new Tile(tx, ty, tw, th, jpeg);
+        }
+        return (monitor, frameW, frameH, tiles);
+    }
+
+    // ── Cursor stream ────────────────────────────────────────────────────────
+    // png.Length == 0 means "shape unchanged since the last CursorUpdate
+    // on this monitor"; the master reuses the cached shape.
+
+    public static Message CursorUpdate(
+        int monitor, int x, int y, bool visible,
+        int hotspotX, int hotspotY, byte[] png)
+    {
+        using var ms = new MemoryStream();
+        using var w  = new BinaryWriter(ms);
+        w.Write(monitor);
+        w.Write(x);
+        w.Write(y);
+        w.Write(visible);
+        w.Write(hotspotX);
+        w.Write(hotspotY);
+        w.Write(png.Length);
+        if (png.Length > 0) w.Write(png);
+        return new Message { Type = MessageType.CursorUpdate, Payload = ms.ToArray() };
+    }
+
+    public static (int monitor, int x, int y, bool visible,
+                   int hotspotX, int hotspotY, byte[] png) ParseCursorUpdate(byte[] p)
+    {
+        using var ms = new MemoryStream(p);
+        using var r  = new BinaryReader(ms);
+        int  monitor  = r.ReadInt32();
+        int  x        = r.ReadInt32();
+        int  y        = r.ReadInt32();
+        bool visible  = r.ReadBoolean();
+        int  hotX     = r.ReadInt32();
+        int  hotY     = r.ReadInt32();
+        int  pngLen   = r.ReadInt32();
+        byte[] png    = pngLen > 0 ? r.ReadBytes(pngLen) : Array.Empty<byte>();
+        return (monitor, x, y, visible, hotX, hotY, png);
+    }
 }
 
 internal static class AppInfo
 {
-    public const string Version = "1.3";
+    public const string Version = "1.8";
 }
 
 // Five PIN colors shared by slave display and master selection
