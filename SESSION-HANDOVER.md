@@ -1,4 +1,4 @@
-# Session Handover — RemoteDesktop v1.8
+# Session Handover — RemoteDesktop v1.9
 
 > 給接手的 Claude 看：先讀這份，再讀 `CLAUDE.md` + `CHANGELOG.md`。
 
@@ -6,12 +6,12 @@
 
 ## 目前狀態（2026-05-21）
 
-- **版本**：1.8（master 分支上）
+- **版本**：1.9（master 分支上）
 - **Build**：clean，0 警告 0 錯誤
 - **Working tree**：乾淨（除非剛產生 release zip）
-- **GitHub**：https://github.com/waterisme/waterisme，分支 `master` 含 v1.8 全部變更
-- **Tag**：`v1.3-stable`（早期穩定點）、`v1.8-stable`（目前穩定點）
-- **Release**：`RemoteDesktop-v1.8.zip` 在 repo 根目錄（self-contained exe + CHANGELOG）
+- **GitHub**：https://github.com/waterisme/waterisme，分支 `master` 含 v1.9 全部變更
+- **Tag**：`v1.3-stable`、`v1.8-stable`、`v1.9-stable`
+- **Release**：`publish\RemoteDesktop.exe`（如需 zip 用 `打包 + zip`）
 
 ## Repo 結構
 
@@ -111,8 +111,8 @@ dotnet publish -c Release -r win-x64 --self-contained true `
 - **H.264 編碼**（給非 LAN 用）：分支原本叫 `experiment-h264` 就是準備做這個，
   但 v1.4-v1.8 只做了 hash skip + tile diff。Surface Pro 3 有 QuickSync H.264
   硬編能力，但要用 DXGI Output Duplication 才能發揮效益（我們現在用 BitBlt 進 CPU 記憶體）。
-- 連線歷史可以顯示「最後使用 PIN」（自訂或顏色）讓使用者更快重連
-- Slave 的「自訂 PIN」可以加「清除設定」按鈕（目前要在對話框輸入空字串）
+- （v1.9 已完成）連線歷史顯示最後使用 PIN
+- （v1.9 已完成）Slave 自訂 PIN「清除」按鈕
 
 ## 怎麼讓新的 Claude 接手
 

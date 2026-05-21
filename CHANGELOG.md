@@ -1,5 +1,19 @@
 # 版本紀錄
 
+## v1.9 — 2026-05-21
+
+**UX：連線歷史顯示「最後使用 PIN」**
+- `ConnectionEntry` 加 `LastPin` 欄位，持久化到 `%APPDATA%\RemoteDesktop\history.json`
+  （舊版 history.json 無此欄位 → 反序列化為 null，向後相容）。
+- `ConnectionHistory.AddOrUpdate(nick, ip, pin, port)`：未帶 pin 時保留舊紀錄的 pin。
+- ConnectDialog 歷史清單顯示 `暱稱 (IP)  [紅]` 或 `[●●●]`（自訂 PIN 遮罩避免肩窺）。
+- 選歷史項目時，自訂 PIN 自動填入 PIN textbox；顏色 PIN 留給使用者點顏色按鈕。
+- 連線成功（顏色或 PIN）都會更新該紀錄的 LastPin，下次直接快速重連。
+
+**UX：Slave「清除自訂 PIN」按鈕**
+- `CustomPinDialog` 在已設定 PIN 時多顯示一顆紅色「清除」按鈕（左側），按下會跳確認後直接清除。
+- 取消了「必須輸入空字串才能清除」的隱藏操作（仍保留留空 OK 的舊行為當 fallback）。
+
 ## v1.8 — 2026-05-19
 
 **Bug 修正：v1.7 整個畫面 freeze**

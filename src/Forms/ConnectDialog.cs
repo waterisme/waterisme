@@ -14,6 +14,7 @@ public sealed class ConnectDialog : Form
 
     private readonly TextBox _nickBox;
     private readonly TextBox _ipBox;
+    private readonly TextBox _pinBox;
     private readonly ListBox _historyList;
 
     // (back, fore, display text)
@@ -25,6 +26,9 @@ public sealed class ConnectDialog : Form
         (Color.FromArgb(20,20,20),  Color.White, "黑"),
         (Color.WhiteSmoke,          Color.Black, "白"),
     };
+
+    private static bool IsColorName(string s) =>
+        s == "紅" || s == "藍" || s == "黃" || s == "黑" || s == "白";
 
     public ConnectDialog()
     {
@@ -126,14 +130,14 @@ public sealed class ConnectDialog : Form
             Size      = new Size(68, 22),
             Font      = new Font("Segoe UI", 10),
         });
-        var pinBox = new TextBox
+        _pinBox = new TextBox
         {
             Location  = new Point(90, y),
             Size      = new Size(150, 28),
             Font      = new Font("Segoe UI", 11),
             MaxLength = 32,
         };
-        Controls.Add(pinBox);
+        Controls.Add(_pinBox);
 
         var pinConnectBtn = new Button
         {
@@ -150,12 +154,12 @@ public sealed class ConnectDialog : Form
         {
             string ip = _ipBox.Text.Trim();
             if (ip.Length == 0) { ShowErr("請先輸入 IP 位址。"); return; }
-            string p = pinBox.Text.Trim();
+            string p = _pinBox.Text.Trim();
             if (p.Length == 0) { ShowErr("請輸入 PIN。"); return; }
             Nickname = _nickBox.Text.Trim().Length > 0 ? _nickBox.Text.Trim() : ip;
             Ip = ip;
             Pin = p;
-            ConnectionHistory.AddOrUpdate(Nickname, Ip, Port);
+            ConnectionHistory.AddOrUpdate(Nickname, Ip, Pin, Port);
             DialogResult = DialogResult.OK;
             Close();
         };
@@ -186,29 +190,26 @@ public sealed class ConnectDialog : Form
         Nickname = _nickBox.Text.Trim().Length > 0 ? _nickBox.Text.Trim() : ip;
         Ip  = ip;
         Pin = btn.Tag as string ?? btn.Text;
-        ConnectionHistory.AddOrUpdate(Nickname, Ip, Port);
+        ConnectionHistory.AddOrUpdate(Nickname, Ip, Pin, Port);
         DialogResult = DialogResult.OK;
         Close();
     }
 
     // ── History ──────────────────────────────────────────────────────────────
 
-    private void HistorySelected(object? s, EventArgs e)
-    {
-        if (_historyList.SelectedItem is ConnectionEntry entry)
-        {
-            _nickBox.Text = entry.Nickname;
-            _ipBox.Text   = entry.Ip;
-        }
-    }
+    private void HistorySelected(object? s, EventArgs e) => FillFromHistory();
+    private void HistoryDoubleClick(object? s, EventArgs e) => FillFromHistory();
 
-    private void HistoryDoubleClick(object? s, EventArgs e)
+    private void FillFromHistory()
     {
-        if (_historyList.SelectedItem is ConnectionEntry entry)
-        {
-            _nickBox.Text = entry.Nickname;
-            _ipBox.Text   = entry.Ip;
-        }
+        if (_historyList.SelectedItem is not ConnectionEntry entry) return;
+        _nickBox.Text = entry.Nickname;
+        _ipBox.Text   = entry.Ip;
+        // 只把自訂 PIN 自動填入 textbox；顏色 PIN 留給使用者點按鈕
+        if (!string.IsNullOrEmpty(entry.LastPin) && !IsColorName(entry.LastPin))
+            _pinBox.Text = entry.LastPin;
+        else
+            _pinBox.Text = "";
     }
 
     private void LoadHistory()
