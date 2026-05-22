@@ -364,6 +364,9 @@ internal sealed class CustomPinDialog : Form
             MaxLength = 32,
             UseSystemPasswordChar = false,
             Text      = existing,
+            BackColor = Color.FromArgb(50, 50, 55),
+            ForeColor = Color.White,
+            BorderStyle = BorderStyle.FixedSingle,
         };
         Controls.Add(box);
 
@@ -398,10 +401,14 @@ internal sealed class CustomPinDialog : Form
 
         var ok = new Button
         {
-            Text     = "儲存",
-            Location = new Point(hasExisting ? 130 : 80, 130),
-            Size     = new Size(100, 34),
-            Font     = new Font("Segoe UI", 10),
+            Text      = "儲存",
+            Location  = new Point(hasExisting ? 130 : 80, 130),
+            Size      = new Size(100, 34),
+            Font      = new Font("Segoe UI", 10),
+            BackColor = Color.FromArgb(0, 120, 215),
+            ForeColor = Color.White,
+            FlatStyle = FlatStyle.Flat,
+            Cursor    = Cursors.Hand,
             DialogResult = DialogResult.None,
         };
         ok.Click += (_, _) =>
@@ -421,10 +428,14 @@ internal sealed class CustomPinDialog : Form
 
         var cancel = new Button
         {
-            Text     = "取消",
-            Location = new Point(hasExisting ? 240 : 200, 130),
-            Size     = new Size(100, 34),
-            Font     = new Font("Segoe UI", 10),
+            Text      = "取消",
+            Location  = new Point(hasExisting ? 240 : 200, 130),
+            Size      = new Size(100, 34),
+            Font      = new Font("Segoe UI", 10),
+            BackColor = Color.FromArgb(70, 70, 75),
+            ForeColor = Color.White,
+            FlatStyle = FlatStyle.Flat,
+            Cursor    = Cursors.Hand,
             DialogResult = DialogResult.Cancel,
         };
         Controls.Add(cancel);

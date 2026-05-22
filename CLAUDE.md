@@ -4,9 +4,9 @@
 
 ## 當前版本
 
-**v1.9** (master 分支，2026-05-21)
+**v2.0** (master 分支，2026-05-22)
 
-最近的 stable tag：`v1.8-stable`、`v1.3-stable`
+最近的 stable tag：`v2.0-stable`、`v1.9-stable`、`v1.8-stable`、`v1.3-stable`
 
 ## 使用者指令（精簡關鍵字）
 
