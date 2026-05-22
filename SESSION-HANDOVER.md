@@ -1,4 +1,4 @@
-# Session Handover — RemoteDesktop v2.0
+# Session Handover — RemoteDesktop v1.10
 
 > 給接手的 Claude 看：先讀這份，再讀 `CLAUDE.md` + `CHANGELOG.md`。
 
@@ -6,12 +6,13 @@
 
 ## 目前狀態（2026-05-22）
 
-- **版本**：2.0（master 分支上）
+- **版本**：1.10（master 分支上）
 - **Build**：clean，0 警告 0 錯誤
 - **Working tree**：乾淨（除非剛產生 release zip）
-- **GitHub**：https://github.com/waterisme/waterisme，分支 `master` 含 v2.0 全部變更
-- **Tag**：`v1.3-stable`、`v1.8-stable`、`v1.9-stable`、`v2.0-stable`
-- **Release**：`publish\RemoteDesktop.exe`；另複製到工作資料夾 `P:\BE\01.其他留存資料\00.AI資料\coding\RemoteDesktop-v2.0.exe`
+- **GitHub**：https://github.com/waterisme/waterisme，分支 `master` 含 v1.10 全部變更
+- **Tag**：`v1.3-stable`、`v1.8-stable`、`v1.9-stable`、`v1.10-stable`
+- **版號規則**：1.9 → 1.10 → 1.11 → 1.12 …；只有重大改變才跳 2.0
+- **Release**：`publish\RemoteDesktop.exe`；工作資料夾 `P:\BE\01.其他留存資料\00.AI資料\coding\RemoteDesktop-v1.10.exe`
 
 ## Repo 結構
 

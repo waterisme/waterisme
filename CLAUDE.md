@@ -4,9 +4,9 @@
 
 ## 當前版本
 
-**v2.0** (master 分支，2026-05-22)
+**v1.10** (master 分支，2026-05-22)
 
-最近的 stable tag：`v2.0-stable`、`v1.9-stable`、`v1.8-stable`、`v1.3-stable`
+最近的 stable tag：`v1.10-stable`、`v1.9-stable`、`v1.8-stable`、`v1.3-stable`
 
 ## 使用者指令（精簡關鍵字）
 
@@ -39,8 +39,9 @@
 
 1. **改 code 前必須先跟使用者確認**，不可未經授權直接動工
 2. **每次改 code，`src/Core/Protocol.cs` 的 `AppInfo.Version` 必須遞增**
-   - Bug fix / 小改 → patch +0.1（例如 1.8 → 1.9）
-   - 新功能 → minor +0.1（例如 1.9 → 2.0 視重要程度）
+   - 小改 / bug fix / 一般新功能 → 第二位累加（1.9 → 1.10 → 1.11 → 1.12 …）
+   - **重大改變**（架構翻新、不相容變更等）才跳大版本（1.x → 2.0）
+   - 注意：`1.10` > `1.9`，第二位是整數累加，不是 patch 小數
 3. **`CHANGELOG.md`** 必須補上對應條目
 4. **`CLAUDE.md`** 的「當前版本」一起更新
 5. **流程**：改 code → build → publish → commit → push 一次完成
