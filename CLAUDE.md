@@ -4,7 +4,7 @@
 
 ## 當前版本
 
-**v1.8** (master 分支，2026-05-21)
+**v1.9** (master 分支，2026-05-21)
 
 最近的 stable tag：`v1.8-stable`、`v1.3-stable`
 

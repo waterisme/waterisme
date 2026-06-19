@@ -367,10 +367,39 @@ internal sealed class CustomPinDialog : Form
         };
         Controls.Add(box);
 
+        bool hasExisting = !string.IsNullOrEmpty(existing);
+
+        // 已設定 PIN 時：[清除][儲存][取消]，否則只有 [儲存][取消]
+        if (hasExisting)
+        {
+            var clearBtn = new Button
+            {
+                Text      = "清除",
+                Location  = new Point(20, 130),
+                Size      = new Size(90, 34),
+                Font      = new Font("Segoe UI", 10),
+                BackColor = Color.FromArgb(160, 60, 60),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                DialogResult = DialogResult.None,
+            };
+            clearBtn.Click += (_, _) =>
+            {
+                var ans = MessageBox.Show(
+                    "確定要清除已設定的自訂 PIN？\n（清除後僅可用顏色 PIN 登入）",
+                    "確認清除", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                if (ans != DialogResult.Yes) return;
+                Pin = "";
+                DialogResult = DialogResult.OK;
+                Close();
+            };
+            Controls.Add(clearBtn);
+        }
+
         var ok = new Button
         {
             Text     = "儲存",
-            Location = new Point(80, 130),
+            Location = new Point(hasExisting ? 130 : 80, 130),
             Size     = new Size(100, 34),
             Font     = new Font("Segoe UI", 10),
             DialogResult = DialogResult.None,
@@ -380,7 +409,7 @@ internal sealed class CustomPinDialog : Form
             string p = box.Text.Trim();
             if (p.Length > 0 && p.Length < 4)
             {
-                MessageBox.Show("PIN 至少 4 個字元（或留空清除）。", "錯誤",
+                MessageBox.Show("PIN 至少 4 個字元（或按「清除」/留空清除）。", "錯誤",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
@@ -393,7 +422,7 @@ internal sealed class CustomPinDialog : Form
         var cancel = new Button
         {
             Text     = "取消",
-            Location = new Point(200, 130),
+            Location = new Point(hasExisting ? 240 : 200, 130),
             Size     = new Size(100, 34),
             Font     = new Font("Segoe UI", 10),
             DialogResult = DialogResult.Cancel,
