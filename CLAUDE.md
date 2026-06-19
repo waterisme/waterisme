@@ -4,7 +4,7 @@
 
 ## 當前版本
 
-**v1.10** (master 分支，2026-05-22)
+**v1.11** (claude/remote-desktop-software-1CfWb 分支，2026-06-19)
 
 最近的 stable tag：`v1.10-stable`、`v1.9-stable`、`v1.8-stable`、`v1.3-stable`
 

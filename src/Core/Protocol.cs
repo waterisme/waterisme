@@ -156,9 +156,31 @@ public static class Msg
         uint v = BitConverter.ToUInt32(p, 0); return ((ushort)(v >> 16), (v & 1) == 1);
     }
 
-    public static Message ClipboardData(string text) =>
-        new() { Type = MessageType.ClipboardData, Payload = Encoding.UTF8.GetBytes(text) };
-    public static string ParseClipboard(byte[] p) => Encoding.UTF8.GetString(p);
+    // Clipboard payload: [byte kind(0=text,1=image)][data...]
+    public static Message ClipboardText(string text)
+    {
+        var bytes = Encoding.UTF8.GetBytes(text);
+        var payload = new byte[1 + bytes.Length];
+        payload[0] = 0;
+        bytes.CopyTo(payload, 1);
+        return new() { Type = MessageType.ClipboardData, Payload = payload };
+    }
+
+    public static Message ClipboardImage(byte[] png)
+    {
+        var payload = new byte[1 + png.Length];
+        payload[0] = 1;
+        png.CopyTo(payload, 1);
+        return new() { Type = MessageType.ClipboardData, Payload = payload };
+    }
+
+    public static (bool isImage, string? text, byte[]? png) ParseClipboard(byte[] p)
+    {
+        if (p.Length == 0) return (false, "", null);
+        bool isImage = p[0] == 1;
+        var data = p[1..];
+        return isImage ? (true, null, data) : (false, Encoding.UTF8.GetString(data), null);
+    }
 
     public static Message StreamPause(int monitorIndex) =>
         new() { Type = MessageType.StreamPause, Payload = BitConverter.GetBytes(monitorIndex) };
@@ -257,7 +279,7 @@ public static class Msg
 
 internal static class AppInfo
 {
-    public const string Version = "1.10";
+    public const string Version = "1.11";
 }
 
 // Five PIN colors shared by slave display and master selection

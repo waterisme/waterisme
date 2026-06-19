@@ -1,5 +1,41 @@
 # 版本紀錄
 
+## v1.11 — 2026-06-19
+
+**功能：剪貼簿支援圖片 + 完整廣播到所有連線**
+- `ClipboardData` payload 前置 1 byte 類型旗標（0=文字，1=圖片 PNG），
+  新增 `Msg.ClipboardText` / `Msg.ClipboardImage` / 新版 `ParseClipboard`。
+- `ClipboardSync` 改為同時輪詢文字與圖片：
+  - 圖片以「原始像素 FNV-1a hash」判斷是否變化（LockBits 直接轉 32bppArgb，
+    對 PNG 重新編碼穩定，不會因壓縮位元組不同而誤判 → 不會 echo 迴圈）。
+  - 新增 `SetRemoteText` / `SetRemoteImage`；設定後同步更新 last 簽章避免回傳。
+  - 移除舊的 sticky `_suppress` 旗標（會吞掉遠端設定後的第一次本機複製）。
+- 廣播為既有架構自然行為：N 個連線各自有獨立 `ClipboardSync` 輪詢同一份本機
+  剪貼簿，因此在 master 或任一 slave 複製（文字或圖片），會傳到其餘所有端。
+
+**修正：Ctrl/Shift/Alt/CapsLock/Tab/方向鍵 無法完整遙控**
+- 主控端鍵盤改用 `IMessageFilter` 攔截 `WM_(SYS)KEYDOWN/UP` 原始訊息，取代
+  原本的 `KeyDown/KeyUp` 事件。原事件會漏鍵：Alt/F10 走 `WM_SYSKEYDOWN`
+  被選單迴圈吃掉；Tab/方向鍵被對話框導覽（ProcessDialogKey）攔截，根本進不到
+  KeyDown。改用訊息過濾後所有鍵都乾淨轉發，且本機不會被 Alt 開選單、Alt+F4
+  關視窗、Tab 跑焦點（僅 F11/Esc 保留為本機快捷）。
+- `InputSimulator.KeyEvent` 對方向鍵/Insert/Delete/Home/End/PgUp/PgDn/
+  右側修飾鍵/Win 鍵補上 `KEYEVENTF_EXTENDEDKEY`，注入更正確。
+
+**修正：slave 端修飾鍵「卡住」（Ctrl/Shift 放不掉）**
+- 主控端視窗失焦（`Deactivate`）或關閉時，自動補送所有「已按下未放開」鍵的
+  key-up（`MonitorWindow._pressedKeys` 追蹤）。
+- 被控端在連線結束時呼叫 `InputSimulator.ReleaseModifiers()` 當安全網，強制
+  放開 Shift/Ctrl/Alt/Win（左右皆含），避免 master 中途斷線留下卡鍵。
+
+**清理：移除未使用的 SharpDX 套件參考**
+- `RemoteDesktop.csproj` 仍掛著 `SharpDX` / `SharpDX.DXGI`，但擷取早已改純
+  Win32 BitBlt、原始碼零引用 → 移除，避免還原失敗與舊錯誤誤導。
+
+**建置：新增 GitHub Actions 自動打包**
+- `.github/workflows/build.yml`：windows runner 上 `dotnet publish` 出
+  single-file `RemoteDesktop.exe`，上傳為 artifact 供下載。
+
 ## v1.10 — 2026-05-22
 
 > （此版原誤標為 v2.0；版本號規則改為小改累加 patch，重大才跳大版本，故修正為 1.10。）

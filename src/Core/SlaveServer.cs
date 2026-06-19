@@ -157,7 +157,9 @@ public sealed class SlaveServer : IDisposable
             void Enqueue(Message m) { var b = m.ToBytes(); sendQueue.TryAdd(b, 5); }
 
             // ── Clipboard ──
-            using var clipboard = new ClipboardSync(text => Enqueue(Msg.ClipboardData(text)));
+            using var clipboard = new ClipboardSync(
+                text => Enqueue(Msg.ClipboardText(text)),
+                png  => Enqueue(Msg.ClipboardImage(png)));
             clipboard.Start();
 
             // ── Capture threads ──
@@ -193,6 +195,11 @@ public sealed class SlaveServer : IDisposable
                 }
             }
             catch { /* read timeout / socket dead / etc. */ }
+
+            // Safety net: a master can drop while a modifier is held (window lost
+            // focus, crash, network cut) and never deliver the key-up — which
+            // leaves Ctrl/Shift/Alt "stuck" down on this machine. Force-release.
+            InputSimulator.ReleaseModifiers();
 
             pingTimer.Dispose();
             sendQueue.CompleteAdding();
@@ -444,7 +451,12 @@ public sealed class SlaveServer : IDisposable
                 var (vk, kdown) = Msg.ParseKeyEvent(msg.Payload);
                 InputSimulator.KeyEvent(vk, kdown); break;
             case MessageType.ClipboardData:
-                clipboard.SetRemote(Msg.ParseClipboard(msg.Payload)); break;
+            {
+                var (isImage, text, png) = Msg.ParseClipboard(msg.Payload);
+                if (isImage && png != null) clipboard.SetRemoteImage(png);
+                else if (text != null)      clipboard.SetRemoteText(text);
+                break;
+            }
             case MessageType.StreamPause:
                 int pi = Msg.ParseMonitorIndex(msg.Payload);
                 if (pi < monitorPaused.Length) monitorPaused[pi] = true; break;

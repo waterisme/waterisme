@@ -57,7 +57,9 @@ public sealed class MasterClient : IDisposable
             _running = true;
             new Thread(ReceiveLoop) { IsBackground = true, Name = "MasterRecv" }.Start();
 
-            _clipboard = new ClipboardSync(text => { try { Send(Msg.ClipboardData(text)); } catch { } });
+            _clipboard = new ClipboardSync(
+                text => { try { Send(Msg.ClipboardText(text)); }  catch { } },
+                png  => { try { Send(Msg.ClipboardImage(png)); }  catch { } });
             _clipboard.Start();
             return true;
         }
@@ -102,8 +104,12 @@ public sealed class MasterClient : IDisposable
                         MonitorInfoReceived?.Invoke(ws, hs);
                         break;
                     case MessageType.ClipboardData:
-                        _clipboard?.SetRemote(Msg.ParseClipboard(msg.Payload));
+                    {
+                        var (isImage, text, png) = Msg.ParseClipboard(msg.Payload);
+                        if (isImage && png != null) _clipboard?.SetRemoteImage(png);
+                        else if (text != null)      _clipboard?.SetRemoteText(text);
                         break;
+                    }
                     case MessageType.Ping:
                         TrySend(Msg.Pong());
                         break;

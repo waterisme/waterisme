@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
@@ -10,7 +11,7 @@ namespace RemoteDesktop.Forms;
 /// One window per remote monitor. Always scales the received frame to fill the
 /// canvas (letterbox / stretch selectable). Supports fullscreen (F11).
 /// </summary>
-public sealed class MonitorWindow : Form
+public sealed class MonitorWindow : Form, IMessageFilter
 {
     // ── Public ───────────────────────────────────────────────────────────────
     public event Action? RequestDisconnect;
@@ -43,6 +44,10 @@ public sealed class MonitorWindow : Form
     private FormBorderStyle  _prevBorder;
     private Rectangle        _prevBounds;
     private bool             _streamPaused;
+
+    // Keys we have sent "down" for but not yet "up". On focus loss we release
+    // them all so the slave never gets a stuck modifier (Ctrl/Shift/Alt).
+    private readonly HashSet<ushort> _pressedKeys = new();
 
     // FPS counter — counts received frames, recomputed once per second
     private int              _fpsFrameCount;
@@ -145,14 +150,14 @@ public sealed class MonitorWindow : Form
         _overlayTimer.Tick    += OnOverlayTimer;
 
         // ── Keyboard ──
-        KeyDown += (_, e) =>
-        {
-            if (e.KeyCode == Keys.F11)  { ToggleFullscreen(); e.Handled = true; return; }
-            if (e.KeyCode == Keys.Escape && _fullscreen) { ExitFullscreen(); e.Handled = true; return; }
-            _client.SendKeyEvent((ushort)e.KeyCode, true);
-            e.Handled = e.SuppressKeyPress = true;
-        };
-        KeyUp += (_, e) => _client.SendKeyEvent((ushort)e.KeyCode, false);
+        // We intercept raw key messages via IMessageFilter instead of the
+        // KeyDown/KeyUp events. The events miss several keys: Alt/F10 arrive as
+        // WM_SYSKEYDOWN (eaten by the menu loop), and Tab/arrows are swallowed by
+        // dialog navigation (ProcessDialogKey) before KeyDown ever fires. The
+        // message filter sees every WM_(SYS)KEYDOWN/UP first, so all keys —
+        // Ctrl/Shift/Alt/CapsLock/Tab/arrows — forward cleanly to the slave.
+        Application.AddMessageFilter(this);
+        Deactivate += (_, _) => ReleaseAllKeys();   // focus lost → release held keys
 
         // ── Mouse wheel ──
         MouseWheel += (_, e) =>
@@ -161,6 +166,52 @@ public sealed class MonitorWindow : Form
             var (nx, ny) = Normalize(pos.X, pos.Y);
             _client.SendMouseScroll(_monitorIndex, nx, ny, e.Delta);
         };
+    }
+
+    // ── Raw keyboard interception ──────────────────────────────────────────────
+    private const int WM_KEYDOWN    = 0x0100;
+    private const int WM_KEYUP      = 0x0101;
+    private const int WM_SYSKEYDOWN = 0x0104;
+    private const int WM_SYSKEYUP   = 0x0105;
+
+    /// <summary>
+    /// App-wide message hook. Only acts while THIS window is the active form, so
+    /// other windows (MainForm, ConnectDialog text boxes) are unaffected.
+    /// Forwards every key to the slave and swallows it locally so Alt won't open
+    /// menus, Alt+F4 won't close the viewer, and Tab won't move local focus.
+    /// </summary>
+    public bool PreFilterMessage(ref Message m)
+    {
+        switch (m.Msg)
+        {
+            case WM_KEYDOWN:
+            case WM_SYSKEYDOWN:
+            case WM_KEYUP:
+            case WM_SYSKEYUP:
+                if (ActiveForm != this) return false;
+
+                bool   down = m.Msg == WM_KEYDOWN || m.Msg == WM_SYSKEYDOWN;
+                ushort vk   = (ushort)(m.WParam.ToInt64() & 0xFFFF);
+
+                // Local-only shortcuts (never sent to the slave)
+                if (down && vk == (ushort)Keys.F11) { ToggleFullscreen(); return true; }
+                if (down && vk == (ushort)Keys.Escape && _fullscreen) { ExitFullscreen(); return true; }
+
+                if (down) _pressedKeys.Add(vk);
+                else      _pressedKeys.Remove(vk);
+
+                _client.SendKeyEvent(vk, down);
+                return true;   // handled — stop local dispatch
+        }
+        return false;
+    }
+
+    private void ReleaseAllKeys()
+    {
+        if (_pressedKeys.Count == 0) return;
+        foreach (var vk in _pressedKeys)
+            try { _client.SendKeyEvent(vk, false); } catch { }
+        _pressedKeys.Clear();
     }
 
     // ── Receive a new frame ──────────────────────────────────────────────────
@@ -381,6 +432,8 @@ public sealed class MonitorWindow : Form
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
+        Application.RemoveMessageFilter(this);
+        ReleaseAllKeys();
         _overlayTimer.Stop();
         if (_fullscreen) ExitFullscreen();
         lock (_imgLock) { _canvasImage?.Dispose(); _canvasImage = null; }
