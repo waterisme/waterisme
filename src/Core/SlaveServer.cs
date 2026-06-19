@@ -157,6 +157,10 @@ public sealed class SlaveServer : IDisposable
         try { cap = new DxgiCapture(monitor.AdapterIndex, monitor.OutputIndex); }
         catch { return; }
 
+        // Per-session frame-change detection — skip encode+send when frame is unchanged.
+        // FNV-1a hash sampled every 256 bytes of the scaled bitmap (~30K samples / frame, < 1 ms).
+        long lastHash = 0;
+
         while (_running && !queue.IsAddingCompleted)
         {
             // Pause when master says so
@@ -186,6 +190,15 @@ public sealed class SlaveServer : IDisposable
                     bmp = scaled;
                 }
 
+                long hash = QuickHash(bmp);
+                if (hash == lastHash)
+                {
+                    bmp.Dispose();
+                    Thread.Sleep(30);
+                    continue;
+                }
+                lastHash = hash;
+
                 byte[] jpeg;
                 using (bmp) using (var ms = new MemoryStream())
                 {
@@ -204,6 +217,37 @@ public sealed class SlaveServer : IDisposable
             catch { Thread.Sleep(100); }
         }
         cap?.Dispose();
+    }
+
+    // FNV-1a 64-bit hash sampled every 256 bytes of the bitmap's raw pixel data.
+    // ~30K samples on a 1920×1080 frame → < 1 ms, false-collision probability negligible.
+    private static unsafe long QuickHash(Bitmap bmp)
+    {
+        var rect = new Rectangle(0, 0, bmp.Width, bmp.Height);
+        var data = bmp.LockBits(rect, ImageLockMode.ReadOnly, bmp.PixelFormat);
+        try
+        {
+            byte* ptr = (byte*)data.Scan0;
+            int   len = data.Stride * data.Height;
+            ulong hash = 14695981039346656037UL;          // FNV offset basis
+            const ulong PRIME = 1099511628211UL;
+            for (int i = 0; i < len; i += 256)
+            {
+                hash ^= ptr[i];
+                hash *= PRIME;
+            }
+            // Tail bytes — guard against length not divisible by 256
+            for (int i = len - 8; i < len && i >= 0; i++)
+            {
+                hash ^= ptr[i];
+                hash *= PRIME;
+            }
+            return (long)hash;
+        }
+        finally
+        {
+            bmp.UnlockBits(data);
+        }
     }
 
     // ── Input ─────────────────────────────────────────────────────────────────

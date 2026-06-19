@@ -173,7 +173,7 @@ public static class Msg
 
 internal static class AppInfo
 {
-    public const string Version = "1.3";
+    public const string Version = "1.4";
 }
 
 // Five PIN colors shared by slave display and master selection

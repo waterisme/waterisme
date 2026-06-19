@@ -44,6 +44,11 @@ public sealed class MonitorWindow : Form
     private Rectangle        _prevBounds;
     private bool             _streamPaused;
 
+    // FPS counter — counts received frames, recomputed once per second
+    private int              _fpsFrameCount;
+    private long             _fpsLastTickMs;
+    private double           _fps;
+
     // ── Constructor ───────────────────────────────────────────────────────────
     public MonitorWindow(MasterClient client, int monitorIndex, string title)
     {
@@ -162,6 +167,19 @@ public sealed class MonitorWindow : Form
                 lock (_imgLock) { old = _canvasImage; _canvasImage = img; }
                 old?.Dispose();
                 _canvas.Invalidate();
+
+                // FPS update — recompute once per second
+                _fpsFrameCount++;
+                long now = Environment.TickCount64;
+                if (_fpsLastTickMs == 0) _fpsLastTickMs = now;
+                long elapsed = now - _fpsLastTickMs;
+                if (elapsed >= 1000)
+                {
+                    _fps           = _fpsFrameCount * 1000.0 / elapsed;
+                    _fpsFrameCount = 0;
+                    _fpsLastTickMs = now;
+                    UpdateTitle();
+                }
             });
         }
         catch { img.Dispose(); }
@@ -264,8 +282,9 @@ public sealed class MonitorWindow : Form
     {
         string scale = _fillMode ? "填滿" : "等比例";
         string fs    = _fullscreen ? "  [全螢幕]" : "";
-        Text               = $"{_baseTitle}  [{scale}]{fs}";
-        _overlayTitle.Text = _baseTitle;
+        string fps   = $"  {_fps:F1} fps";
+        Text               = $"{_baseTitle}  [{scale}]{fs}{fps}";
+        _overlayTitle.Text = $"{_baseTitle}{fps}";
     }
 
     // ── Mouse forwarding ──────────────────────────────────────────────────────
