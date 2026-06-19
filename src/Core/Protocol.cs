@@ -21,6 +21,7 @@ public enum MessageType : byte
     StreamPause   = 0x0C,
     StreamResume  = 0x0D,
     PinChallenge  = 0x0E,
+    ScreenTiles   = 0x0F,   // delta frame: only changed 64×64 tiles
 }
 
 public sealed class Message
@@ -172,11 +173,53 @@ public static class Msg
 
     public static Message Ping() => new() { Type = MessageType.Ping };
     public static Message Pong() => new() { Type = MessageType.Pong };
+
+    // ── Tile delta frame ─────────────────────────────────────────────────────
+    public readonly record struct Tile(short X, short Y, short W, short H, byte[] Jpeg);
+
+    public static Message ScreenTiles(int monitor, int frameW, int frameH, IReadOnlyList<Tile> tiles)
+    {
+        using var ms = new MemoryStream();
+        using var w  = new BinaryWriter(ms);
+        w.Write(monitor);
+        w.Write(frameW);
+        w.Write(frameH);
+        w.Write(tiles.Count);
+        foreach (var t in tiles)
+        {
+            w.Write(t.X);  w.Write(t.Y);  w.Write(t.W);  w.Write(t.H);
+            w.Write(t.Jpeg.Length);
+            w.Write(t.Jpeg);
+        }
+        return new Message { Type = MessageType.ScreenTiles, Payload = ms.ToArray() };
+    }
+
+    public static (int monitor, int frameW, int frameH, Tile[] tiles) ParseScreenTiles(byte[] p)
+    {
+        using var ms = new MemoryStream(p);
+        using var r  = new BinaryReader(ms);
+        int monitor = r.ReadInt32();
+        int frameW  = r.ReadInt32();
+        int frameH  = r.ReadInt32();
+        int count   = r.ReadInt32();
+        var tiles   = new Tile[count];
+        for (int i = 0; i < count; i++)
+        {
+            short tx = r.ReadInt16();
+            short ty = r.ReadInt16();
+            short tw = r.ReadInt16();
+            short th = r.ReadInt16();
+            int   jl = r.ReadInt32();
+            byte[] jpeg = r.ReadBytes(jl);
+            tiles[i] = new Tile(tx, ty, tw, th, jpeg);
+        }
+        return (monitor, frameW, frameH, tiles);
+    }
 }
 
 internal static class AppInfo
 {
-    public const string Version = "1.6";
+    public const string Version = "1.7";
 }
 
 // Five PIN colors shared by slave display and master selection

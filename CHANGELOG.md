@@ -1,5 +1,40 @@
 # 版本紀錄
 
+## v1.7 — 2026-05-19
+
+**Bug 修正：關閉最後一個視窗會 crash**
+- `MainForm.cs` 在 `FormClosed` 事件**內**同步呼叫 `Disconnect`，會反過來
+  對「正在關閉的這個視窗」呼叫 `w.Close()`，造成 WinForms reentry 並當掉。
+- 改用 `BeginInvoke` 把 `Disconnect` 延後到 FormClosed 結束後執行。
+- `Connection.Disconnecting` 旗標 + `Disconnect()` 開頭 idempotent guard 防重入。
+
+**Bug 修正：master 看不到 slave 的游標**
+- Win32 `BitBlt`（即使加 `CAPTUREBLT`）不會擷取游標 — 它是 OS overlay。
+- `DxgiCapture.Capture()` 在 `BitBlt` 之後加 `GetCursorInfo` + `DrawIconEx`
+  把游標畫到 bitmap 上，再編碼成 JPEG / tile。
+- 處理 hotspot 偏移，並過濾掉跨螢幕的游標。
+- GDI handle（`hbmMask`、`hbmColor`）正確以 `DeleteObject` 釋放。
+
+**UX：ConnectDialog 按 Enter 觸發「用 PIN 連線」**
+- 設 `AcceptButton = pinConnectBtn`。
+
+**新功能：Tile 差異傳輸（Step 2 — 64×64 dirty rectangles）**
+- 新 message `ScreenTiles (0x0F)`：`monitor | frameW | frameH | tileCount |
+  [tileX, tileY, tileW, tileH, jpegLen, jpeg]*`（座標 int16，JPEG 長度 int32）。
+- Slave (`CaptureLoop`) 邏輯：
+  - 維護上一幀的 raw BGRA pixel buffer。
+  - 每幀 frame hash 與前一幀比，相同就完全跳過。
+  - hash 不同 → 切 64×64 比對每塊（`Span<byte>.SequenceEqual`），只編碼有變動的塊。
+  - 變動 tile 數 > 50% 或每 300 幀（~10 s）強制送一張完整 JPEG（keyframe），
+    避免 master 累積偏差。
+- Master (`MasterClient`)：
+  - 維護 `Dictionary<monitor, Bitmap>` 當 canvas。
+  - 收 `ScreenData`：替換 canvas，clone 給 `MonitorWindow` 顯示。
+  - 收 `ScreenTiles`：用 `Graphics.DrawImage` 把 tile blit 到 canvas，clone 給 UI。
+  - 若收到 tile 但無 canvas（master 還沒收到第一張 keyframe）→ 安全丟棄。
+- 多 master 場景：每個 master 各自的 `MasterClient` 維護自己的 canvas；
+  slave 端的 tile 狀態（`prevPixels` 等）也是 per-session 的 local variable，互不干擾。
+
 ## v1.6 — 2026-05-19
 **Bug 修正：視窗全部關閉沒真的斷線（v1.5 修不徹底）**
 - v1.5 用 `IsDisposed` 檢查在 `FormClosed` 事件中永遠是 `false`（dispose 在事件之後才發生），所以「全部關完就 Disconnect」根本沒觸發。

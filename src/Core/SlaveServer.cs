@@ -6,6 +6,7 @@ using System.Drawing.Imaging;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace RemoteDesktop.Core;
@@ -213,13 +214,21 @@ public sealed class SlaveServer : IDisposable
     private static readonly ImageCodecInfo    JpegCodec  = GetJpegCodec();
     private static readonly EncoderParameters JpegParams = MakeJpegParams(80L);
 
+    private const int TILE              = 64;
+    private const int KEYFRAME_INTERVAL = 300;   // ~10 s @ 30 fps — force full frame
+    private const float MAX_TILE_RATIO  = 0.5f;  // > 50% tiles changed → send full frame instead
+
     private void CaptureLoop(MonitorInfo monitor, int idx, BlockingCollection<byte[]> queue, bool[] monitorPaused)
     {
         DxgiCapture? cap = null;
         try { cap = new DxgiCapture(monitor.AdapterIndex, monitor.OutputIndex); }
         catch { return; }
 
-        long lastHash = 0;
+        long lastHash         = 0;
+        byte[]? prevPixels    = null;    // BGRA pixel buffer of last sent frame
+        int     prevW         = 0;
+        int     prevH         = 0;
+        int     framesSinceKf = KEYFRAME_INTERVAL;   // start at threshold → first frame is keyframe
 
         while (_running && !queue.IsAddingCompleted)
         {
@@ -257,13 +266,56 @@ public sealed class SlaveServer : IDisposable
                 }
                 lastHash = hash;
 
+                int w = bmp.Width, h = bmp.Height;
+                byte[] pixels = ExtractPixels(bmp);                // 32bpp BGRA, length = w*h*4
+
+                bool needsKeyframe = prevPixels == null
+                                  || prevW != w || prevH != h
+                                  || framesSinceKf >= KEYFRAME_INTERVAL;
+
+                if (!needsKeyframe)
+                {
+                    var changed = FindChangedTiles(pixels, prevPixels!, w, h);
+                    int totalTiles = ((w + TILE - 1) / TILE) * ((h + TILE - 1) / TILE);
+                    if (changed.Count == 0)
+                    {
+                        // No tile changed — hash differed but visual content didn't (e.g. cursor blink in
+                        // a sub-pixel region). Skip the send.
+                        bmp.Dispose();
+                        Thread.Sleep(30);
+                        continue;
+                    }
+                    if ((float)changed.Count / totalTiles > MAX_TILE_RATIO)
+                    {
+                        // Too much changed — full frame is cheaper.
+                        needsKeyframe = true;
+                    }
+                    else
+                    {
+                        var tiles = EncodeTiles(bmp, changed);
+                        queue.TryAdd(Msg.ScreenTiles(idx, w, h, tiles).ToBytes(), 5);
+                        prevPixels = pixels;
+                        prevW = w; prevH = h;
+                        framesSinceKf++;
+                        bmp.Dispose();
+                        Thread.Sleep(30);
+                        continue;
+                    }
+                }
+
+                // ── Full / keyframe path ──
                 byte[] jpeg;
-                using (bmp) using (var ms = new MemoryStream())
+                using (var ms = new MemoryStream())
                 {
                     bmp.Save(ms, JpegCodec, JpegParams);
                     jpeg = ms.ToArray();
                 }
                 queue.TryAdd(Msg.ScreenData(idx, jpeg).ToBytes(), 5);
+                prevPixels    = pixels;
+                prevW         = w;
+                prevH         = h;
+                framesSinceKf = 0;
+                bmp.Dispose();
                 Thread.Sleep(30);
             }
             catch (Exception ex) when (cap.IsAccessLost(ex))
@@ -275,6 +327,67 @@ public sealed class SlaveServer : IDisposable
             catch { Thread.Sleep(100); }
         }
         cap?.Dispose();
+    }
+
+    // ── Tile helpers ─────────────────────────────────────────────────────────
+
+    /// <summary>Copies the bitmap's raw 32bpp BGRA pixels into a fresh byte[].</summary>
+    private static byte[] ExtractPixels(Bitmap bmp)
+    {
+        var rect = new Rectangle(0, 0, bmp.Width, bmp.Height);
+        var data = bmp.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        try
+        {
+            int len = data.Stride * data.Height;
+            var buf = new byte[len];
+            Marshal.Copy(data.Scan0, buf, 0, len);
+            return buf;
+        }
+        finally { bmp.UnlockBits(data); }
+    }
+
+    /// <summary>
+    /// Returns the list of tile rectangles whose pixels differ between
+    /// <paramref name="cur"/> and <paramref name="prev"/>.
+    /// </summary>
+    private static List<Rectangle> FindChangedTiles(byte[] cur, byte[] prev, int w, int h)
+    {
+        var changed = new List<Rectangle>();
+        int stride  = w * 4;
+        for (int ty = 0; ty < h; ty += TILE)
+        {
+            int th = Math.Min(TILE, h - ty);
+            for (int tx = 0; tx < w; tx += TILE)
+            {
+                int tw   = Math.Min(TILE, w - tx);
+                bool same = true;
+                for (int row = 0; row < th && same; row++)
+                {
+                    int offset = (ty + row) * stride + tx * 4;
+                    int bytes  = tw * 4;
+                    var a = cur.AsSpan(offset, bytes);
+                    var b = prev.AsSpan(offset, bytes);
+                    if (!a.SequenceEqual(b)) same = false;
+                }
+                if (!same) changed.Add(new Rectangle(tx, ty, tw, th));
+            }
+        }
+        return changed;
+    }
+
+    /// <summary>Encodes each tile region as a small JPEG.</summary>
+    private static List<Msg.Tile> EncodeTiles(Bitmap source, List<Rectangle> rects)
+    {
+        var list = new List<Msg.Tile>(rects.Count);
+        foreach (var r in rects)
+        {
+            using var tile = source.Clone(r, source.PixelFormat);
+            using var ms   = new MemoryStream();
+            tile.Save(ms, JpegCodec, JpegParams);
+            list.Add(new Msg.Tile(
+                (short)r.X, (short)r.Y, (short)r.Width, (short)r.Height, ms.ToArray()));
+        }
+        return list;
     }
 
     private static unsafe long QuickHash(Bitmap bmp)
