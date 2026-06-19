@@ -180,7 +180,7 @@ public sealed class MonitorWindow : Form, IMessageFilter
     /// Forwards every key to the slave and swallows it locally so Alt won't open
     /// menus, Alt+F4 won't close the viewer, and Tab won't move local focus.
     /// </summary>
-    public bool PreFilterMessage(ref Message m)
+    public bool PreFilterMessage(ref System.Windows.Forms.Message m)
     {
         switch (m.Msg)
         {
