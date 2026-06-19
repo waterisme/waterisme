@@ -169,11 +169,14 @@ public static class Msg
                 Payload = Encoding.UTF8.GetBytes(string.Join("|", pins)) };
     public static string[] ParsePinChallenge(byte[] p) =>
         Encoding.UTF8.GetString(p).Split('|');
+
+    public static Message Ping() => new() { Type = MessageType.Ping };
+    public static Message Pong() => new() { Type = MessageType.Pong };
 }
 
 internal static class AppInfo
 {
-    public const string Version = "1.5";
+    public const string Version = "1.6";
 }
 
 // Five PIN colors shared by slave display and master selection

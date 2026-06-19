@@ -88,6 +88,9 @@ public sealed class MasterClient : IDisposable
                     case MessageType.ClipboardData:
                         _clipboard?.SetRemote(Msg.ParseClipboard(msg.Payload));
                         break;
+                    case MessageType.Ping:
+                        TrySend(Msg.Pong());
+                        break;
                 }
             }
             catch { break; }

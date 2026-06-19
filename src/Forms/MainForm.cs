@@ -13,11 +13,12 @@ public sealed class MainForm : Form
     // ── Connection tracking ───────────────────────────────────────────────────
     private sealed class Connection
     {
-        public string          Nickname = "";
-        public string          Ip       = "";
-        public MasterClient    Client   = null!;
-        public MonitorWindow[] Windows  = Array.Empty<MonitorWindow>();
+        public string          Nickname    = "";
+        public string          Ip          = "";
+        public MasterClient    Client      = null!;
+        public MonitorWindow[] Windows     = Array.Empty<MonitorWindow>();
         public ListViewItem?   Item;
+        public int             OpenWindows;   // decremented on each FormClosed; reaches 0 → disconnect
     }
 
     private readonly List<Connection> _connections = new();
@@ -206,16 +207,19 @@ public sealed class MainForm : Form
             win.FormClosed += (_, _) =>
             {
                 try { conn.Client.SendStreamPause(idx); } catch { }
-                // All windows closed → tear down the entire connection so the slave stops streaming.
+                // FormClosed fires BEFORE Dispose, so IsDisposed is still false here.
+                // We use an explicit counter instead — when all windows closed, fully disconnect.
                 SafeInvoke(() =>
                 {
-                    if (_connections.Contains(conn) && conn.Windows.All(w => w.IsDisposed))
+                    conn.OpenWindows--;
+                    if (conn.OpenWindows <= 0 && _connections.Contains(conn))
                         Disconnect(conn);
                 });
             };
             win.Show();
             wins[idx] = win;
         }
+        conn.OpenWindows = total;
 
         conn.Windows = wins;
         conn.Item!.SubItems[0].Text = "●";
