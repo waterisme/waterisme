@@ -168,6 +168,11 @@ public sealed class SlaveServer : IDisposable
                     { IsBackground = true, Name = $"Capture[{idx}]" }.Start();
             }
 
+            // ── Cursor thread (independent of frame stream so the cursor is
+            // smooth even when the screen content is static) ──
+            new Thread(() => CursorLoop(monitors, sendQueue))
+                { IsBackground = true, Name = "SlaveCursor" }.Start();
+
             // ── Application-level keepalive: send Ping every 20 s ──
             long lastReceivedMs = Environment.TickCount64;
             var pingTimer = new System.Threading.Timer(_ =>
@@ -331,11 +336,13 @@ public sealed class SlaveServer : IDisposable
 
     // ── Tile helpers ─────────────────────────────────────────────────────────
 
-    /// <summary>Copies the bitmap's raw 32bpp BGRA pixels into a fresh byte[].</summary>
+    /// <summary>Copies the bitmap's raw pixels into a fresh byte[] using its
+    /// NATIVE pixel format — avoids per-frame GDI+ format conversion which
+    /// caused tile-diff comparisons to behave inconsistently.</summary>
     private static byte[] ExtractPixels(Bitmap bmp)
     {
         var rect = new Rectangle(0, 0, bmp.Width, bmp.Height);
-        var data = bmp.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        var data = bmp.LockBits(rect, ImageLockMode.ReadOnly, bmp.PixelFormat);
         try
         {
             int len = data.Stride * data.Height;
@@ -448,6 +455,146 @@ public sealed class SlaveServer : IDisposable
                 enqueue(Msg.Pong()); break;
             case MessageType.Pong:
                 /* alive ack — handled by the read-timeout reset above */ break;
+        }
+    }
+
+    // ── Cursor capture ───────────────────────────────────────────────────────
+    [DllImport("user32.dll")] private static extern bool GetCursorInfo(ref CURSORINFO pci);
+    [DllImport("user32.dll")] private static extern bool GetIconInfo(IntPtr hIcon, out ICONINFO piconinfo);
+    [DllImport("gdi32.dll")]  private static extern bool DeleteObject(IntPtr hObject);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct CURSORINFO
+    {
+        public int    cbSize;
+        public int    flags;
+        public IntPtr hCursor;
+        public POINT  ptScreenPos;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT { public int X; public int Y; }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ICONINFO
+    {
+        public bool   fIcon;
+        public int    xHotspot;
+        public int    yHotspot;
+        public IntPtr hbmMask;
+        public IntPtr hbmColor;
+    }
+    private const int CURSOR_SHOWING = 0x00000001;
+
+    /// <summary>
+    /// Sends CursorUpdate messages ~30 Hz when the cursor moves, changes
+    /// shape, or appears / disappears. PNG payload is only included when
+    /// the shape (hCursor handle) actually changed.
+    /// </summary>
+    private void CursorLoop(List<MonitorInfo> monitors, BlockingCollection<byte[]> queue)
+    {
+        IntPtr lastHandle  = IntPtr.Zero;
+        int    lastFx      = int.MinValue;
+        int    lastFy      = int.MinValue;
+        int    lastMonitor = -1;
+        bool   wasVisible  = false;
+
+        while (_running && !queue.IsAddingCompleted)
+        {
+            try
+            {
+                CURSORINFO ci = default;
+                ci.cbSize = Marshal.SizeOf<CURSORINFO>();
+
+                bool gotInfo = GetCursorInfo(ref ci);
+                bool visible = gotInfo && (ci.flags & CURSOR_SHOWING) != 0 && ci.hCursor != IntPtr.Zero;
+
+                if (!visible)
+                {
+                    if (wasVisible)
+                    {
+                        var msg = Msg.CursorUpdate(Math.Max(0, lastMonitor), 0, 0,
+                            false, 0, 0, Array.Empty<byte>());
+                        queue.TryAdd(msg.ToBytes(), 5);
+                        wasVisible = false;
+                    }
+                    Thread.Sleep(33); continue;
+                }
+
+                // Find which monitor the cursor sits on
+                int monitorIdx = -1;
+                Rectangle bounds = Rectangle.Empty;
+                for (int i = 0; i < monitors.Count; i++)
+                {
+                    var b = monitors[i].Bounds;
+                    if (ci.ptScreenPos.X >= b.Left && ci.ptScreenPos.X < b.Right &&
+                        ci.ptScreenPos.Y >= b.Top  && ci.ptScreenPos.Y < b.Bottom)
+                    { monitorIdx = i; bounds = b; break; }
+                }
+                if (monitorIdx < 0) { Thread.Sleep(33); continue; }
+
+                // Map physical → frame-space coords (matches the scaled bitmap the master receives)
+                int frameW = bounds.Width, frameH = bounds.Height;
+                if (frameW > 1920 || frameH > 1080)
+                {
+                    float s = Math.Min(1920f / frameW, 1080f / frameH);
+                    frameW = (int)(bounds.Width  * s);
+                    frameH = (int)(bounds.Height * s);
+                }
+                int xInMon = ci.ptScreenPos.X - bounds.Left;
+                int yInMon = ci.ptScreenPos.Y - bounds.Top;
+                int fx     = xInMon * frameW / bounds.Width;
+                int fy     = yInMon * frameH / bounds.Height;
+
+                bool shapeChanged = ci.hCursor != lastHandle;
+                bool moved        = fx != lastFx || fy != lastFy || monitorIdx != lastMonitor;
+                bool reappeared   = !wasVisible;
+
+                if (!shapeChanged && !moved && !reappeared)
+                {
+                    Thread.Sleep(33); continue;
+                }
+
+                byte[] png  = Array.Empty<byte>();
+                int    hotX = 0, hotY = 0;
+                if (shapeChanged || reappeared)
+                {
+                    png = EncodeCursorPng(ci.hCursor, out hotX, out hotY);
+                    lastHandle = ci.hCursor;
+                }
+
+                var update = Msg.CursorUpdate(monitorIdx, fx, fy, true, hotX, hotY, png);
+                queue.TryAdd(update.ToBytes(), 5);
+
+                lastFx      = fx;
+                lastFy      = fy;
+                lastMonitor = monitorIdx;
+                wasVisible  = true;
+            }
+            catch { /* GDI hiccup — retry next tick */ }
+
+            Thread.Sleep(33);
+        }
+    }
+
+    private static byte[] EncodeCursorPng(IntPtr hCursor, out int hotspotX, out int hotspotY)
+    {
+        hotspotX = hotspotY = 0;
+        if (hCursor == IntPtr.Zero) return Array.Empty<byte>();
+        if (!GetIconInfo(hCursor, out ICONINFO ii)) return Array.Empty<byte>();
+        hotspotX = ii.xHotspot;
+        hotspotY = ii.yHotspot;
+        try
+        {
+            using var icon = System.Drawing.Icon.FromHandle(hCursor);
+            using var bmp  = icon.ToBitmap();
+            using var ms   = new MemoryStream();
+            bmp.Save(ms, ImageFormat.Png);
+            return ms.ToArray();
+        }
+        catch { return Array.Empty<byte>(); }
+        finally
+        {
+            if (ii.hbmMask  != IntPtr.Zero) DeleteObject(ii.hbmMask);
+            if (ii.hbmColor != IntPtr.Zero) DeleteObject(ii.hbmColor);
         }
     }
 
