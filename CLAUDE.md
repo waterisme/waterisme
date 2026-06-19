@@ -8,6 +8,33 @@
 
 最近的 stable tag：`v1.8-stable`、`v1.3-stable`
 
+## 使用者指令（精簡關鍵字）
+
+當使用者輸入這些精簡指令時，按指定流程執行：
+
+### `打包` — Session packaging（換對話前用）
+預設執行以下全部：
+1. 檢查 working tree，若有未 commit 變更先 commit 並 push
+2. 確認 `AppInfo.Version` 自上一個 tag 後有增加（沒有就警告）
+3. Tag 當前 commit 為 `v<當前版本>-stable`，push tag 到 origin
+4. 更新 `SESSION-HANDOVER.md` 的「目前狀態」區塊（日期、版本、最近 commit）
+5. 更新 `CLAUDE.md` 的「當前版本」
+6. 印出總結 + 「換新對話時貼這段話」的 prompt
+
+可加參數：
+- `打包 + zip` — 額外用 `dotnet publish` 並產出 `RemoteDesktop-v<版本>.zip`
+- `打包 + merge` — 若不在 master，先 merge 回 master 再 tag
+
+### `接手` — 新對話開頭用
+依序讀 `CLAUDE.md` → `SESSION-HANDOVER.md` → `CHANGELOG.md`，
+回報當前版本、最近做了什麼、未完事項，**不要主動改 code**，
+等使用者下指令。
+
+### `返回 v<X.Y>` — 回到某 stable tag
+執行 `git checkout v<X.Y>-stable`（detached HEAD 模式檢視），
+或 `git reset --hard v<X.Y>-stable` 若使用者要丟掉之後改動。
+**操作前先確認**。
+
 ## 工作流程規則（必守，不可違反）
 
 1. **改 code 前必須先跟使用者確認**，不可未經授權直接動工
