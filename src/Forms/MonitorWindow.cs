@@ -20,8 +20,9 @@ public sealed class MonitorWindow : Form
     private readonly int          _monitorIndex;
     private readonly string       _baseTitle;
 
-    // Canvas replaces PictureBox — we own the draw loop for DPI-safe scaling
-    private readonly Panel   _canvas;
+    // Canvas replaces PictureBox — we own the draw loop for DPI-safe scaling.
+    // BufferedPanel enables OptimizedDoubleBuffer to prevent flicker.
+    private readonly BufferedPanel _canvas;
     private Image?           _canvasImage;
     private readonly object  _imgLock     = new();
     private Rectangle        _imgDrawRect;          // updated on every paint
@@ -58,7 +59,7 @@ public sealed class MonitorWindow : Form
         KeyPreview    = true;
 
         // ── Canvas (custom-drawn, fills window below toolbar) ──
-        _canvas = new Panel
+        _canvas = new BufferedPanel
         {
             Dock      = DockStyle.Fill,
             BackColor = Color.Black,
@@ -350,4 +351,20 @@ public sealed class MonitorWindow : Form
         total == 1 ? nickname :
         total == 2 ? $"{nickname} — {(index == 0 ? "左螢幕" : "右螢幕")}" :
         $"{nickname} — 螢幕 {index + 1}";
+}
+
+/// <summary>
+/// Panel with OptimizedDoubleBuffer enabled — eliminates flicker when the
+/// remote frame is redrawn 30× per second.
+/// </summary>
+internal sealed class BufferedPanel : Panel
+{
+    public BufferedPanel()
+    {
+        SetStyle(ControlStyles.OptimizedDoubleBuffer
+               | ControlStyles.AllPaintingInWmPaint
+               | ControlStyles.UserPaint
+               | ControlStyles.ResizeRedraw, true);
+        UpdateStyles();
+    }
 }
