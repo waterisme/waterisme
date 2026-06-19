@@ -170,15 +170,16 @@ public sealed class MainForm : Form
 
         for (int i = 0; i < total; i++)
         {
-            string title = MonitorWindow.MakeTitle(conn.Nickname, i, total);
-            var win = new MonitorWindow(conn.Client, i, title);
+            int    idx   = i;                                  // captured by lambda (for-loop var is shared)
+            string title = MonitorWindow.MakeTitle(conn.Nickname, idx, total);
+            var    win   = new MonitorWindow(conn.Client, idx, title);
 
             // Place on corresponding local screen (by left-to-right index)
-            var screen   = i < localScreens.Length ? localScreens[i] : Screen.PrimaryScreen!;
+            var screen   = idx < localScreens.Length ? localScreens[idx] : Screen.PrimaryScreen!;
             var workArea = screen.WorkingArea;
 
             // Size window so image area matches remote monitor aspect ratio
-            float aspect  = (float)ws[i] / hs[i];
+            float aspect  = (float)ws[idx] / hs[idx];
             int   chrome  = SystemInformation.CaptionHeight + SystemInformation.FrameBorderSize.Height * 2;
             int   maxImgW = workArea.Width  - 40;
             int   maxImgH = workArea.Height - 40 - chrome - ToolbarH;
@@ -204,10 +205,16 @@ public sealed class MainForm : Form
             win.RequestDisconnect += () => SafeInvoke(() => Disconnect(conn));
             win.FormClosed += (_, _) =>
             {
-                try { conn.Client.SendStreamPause(i); } catch { }
+                try { conn.Client.SendStreamPause(idx); } catch { }
+                // All windows closed → tear down the entire connection so the slave stops streaming.
+                SafeInvoke(() =>
+                {
+                    if (_connections.Contains(conn) && conn.Windows.All(w => w.IsDisposed))
+                        Disconnect(conn);
+                });
             };
             win.Show();
-            wins[i] = win;
+            wins[idx] = win;
         }
 
         conn.Windows = wins;

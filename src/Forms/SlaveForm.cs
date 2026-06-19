@@ -1,6 +1,9 @@
 using System;
+using System.ComponentModel;
+using System.Diagnostics;
 using System.Drawing;
 using System.Net;
+using System.Security.Principal;
 using System.Windows.Forms;
 using RemoteDesktop.Core;
 
@@ -14,8 +17,10 @@ public sealed class SlaveForm : Form
 
     public SlaveForm(string colorPin)
     {
+        bool isAdmin = IsRunningAsAdmin();
+
         Text            = "被控端 (Slave)";
-        Size            = new Size(420, 360);
+        Size            = new Size(420, isAdmin ? 360 : 450);
         StartPosition   = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox     = false;
@@ -94,11 +99,50 @@ public sealed class SlaveForm : Form
             Size      = new Size(420, 24),
         };
 
+        // ── Admin warning + elevate button (only when not running as admin) ──
+        Label?  adminWarn   = null;
+        Label?  adminSub    = null;
+        Button? elevateBtn  = null;
+        if (!isAdmin)
+        {
+            adminWarn = new Label
+            {
+                Text      = "⚠ 未以系統管理員身分執行",
+                ForeColor = Color.Gold,
+                Font      = new Font("Segoe UI", 10, FontStyle.Bold),
+                TextAlign = ContentAlignment.MiddleCenter,
+                Location  = new Point(0, 268),
+                Size      = new Size(420, 22),
+            };
+            adminSub = new Label
+            {
+                Text      = "工作管理員等高權限程式將無法操作",
+                ForeColor = Color.LightGray,
+                Font      = new Font("Segoe UI", 8),
+                TextAlign = ContentAlignment.MiddleCenter,
+                Location  = new Point(0, 290),
+                Size      = new Size(420, 18),
+            };
+            elevateBtn = new Button
+            {
+                Text      = "以系統管理員身分重啟",
+                Location  = new Point(120, 312),
+                Size      = new Size(180, 32),
+                Font      = new Font("Segoe UI", 10),
+                BackColor = Color.FromArgb(200, 140, 0),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Cursor    = Cursors.Hand,
+            };
+            elevateBtn.Click += RestartAsAdmin;
+        }
+
         // ── Stop button ──
+        int stopBtnY = isAdmin ? 272 : 360;
         var stopBtn = new Button
         {
             Text      = "停止",
-            Location  = new Point(155, 272),
+            Location  = new Point(155, stopBtnY),
             Size      = new Size(110, 36),
             Font      = new Font("Segoe UI", 11),
             BackColor = Color.FromArgb(180, 50, 50),
@@ -109,6 +153,9 @@ public sealed class SlaveForm : Form
 
         Controls.AddRange(new Control[]
             { title, ipLabel, hint, swatch, _connCountLabel, _statusLabel, stopBtn });
+        if (adminWarn  != null) Controls.Add(adminWarn);
+        if (adminSub   != null) Controls.Add(adminSub);
+        if (elevateBtn != null) Controls.Add(elevateBtn);
 
         // ── Start server ──
         _server = new SlaveServer(colorPin);
@@ -159,6 +206,35 @@ public sealed class SlaveForm : Form
     {
         _server.Dispose();
         base.OnFormClosing(e);
+    }
+
+    private static bool IsRunningAsAdmin()
+    {
+        try
+        {
+            using var identity = WindowsIdentity.GetCurrent();
+            return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
+        }
+        catch { return false; }
+    }
+
+    private void RestartAsAdmin(object? sender, EventArgs e)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName        = Environment.ProcessPath ?? Application.ExecutablePath,
+                UseShellExecute = true,
+                Verb            = "runas",
+            };
+            Process.Start(psi);
+            Application.Exit();
+        }
+        catch (Win32Exception)
+        {
+            // User clicked No on UAC prompt — keep current session running
+        }
     }
 
     private static string GetLocalIP()
